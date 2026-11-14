@@ -45,3 +45,8 @@ ENV/
 build/
 dist/
 *.egg-info/
+
+# auto-sync files
+auto-sync.log
+*.pid
+
