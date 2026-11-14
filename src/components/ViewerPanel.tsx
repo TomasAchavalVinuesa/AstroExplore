@@ -1,6 +1,9 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  Calendar,
+  Check,
+  ChevronDown,
   Download,
   FileDown,
   Grid,
@@ -57,6 +60,8 @@ interface ViewerPanelProps {
 
 const FALLBACK_EPOCHS = ["2025.5 (t₁)", "2026.0 (t₂)", "2026.5 (t₃)", "2027.0 (t₄)"];
 
+const getEpochKey = (obs: SpherexObservation) => `${obs.obs_id}|${obs.bandpass}`;
+
 export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   selectedObs,
   cutout,
@@ -92,6 +97,14 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const [fallbackEpochIdx, setFallbackEpochIdx] = useState<number>(0);
   const [prevCutoutUrl, setPrevCutoutUrl] = useState<string | null>(null);
   const lastCutoutUrlRef = useRef<string | null>(null);
+
+  // Date selector dropdown & preloaded epoch cutouts cache
+  const [dateMenuOpen, setDateMenuOpen] = useState<boolean>(false);
+  const [selectedEpochKeys, setSelectedEpochKeys] = useState<Set<string>>(() => new Set());
+  const dateMenuRef = useRef<HTMLDivElement | null>(null);
+  const [epochCutouts, setEpochCutouts] = useState<
+    Record<string, { status: "loading" | "ready" | "error"; cutout?: RenderedCutout }>
+  >({});
 
   // 6-band representatives for Map 2 "Bands" tab
   const [bandCutouts, setBandCutouts] = useState<
@@ -189,44 +202,203 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     return list.length > 1 ? list.slice(0, 16) : pool.slice(0, 12);
   }, [observations, selectedObs?.bandpass]);
 
+  const epochFramesSignature = useMemo(
+    () => epochFrames.map(getEpochKey).join(","),
+    [epochFrames]
+  );
+
+  // Select all available epoch dates by default when the epoch list changes
+  useEffect(() => {
+    setSelectedEpochKeys(new Set(epochFrames.map(getEpochKey)));
+    setDateMenuOpen(false);
+  }, [epochFramesSignature]);
+
+  // Close date selector dropdown on outside click or Escape
+  useEffect(() => {
+    if (!dateMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dateMenuRef.current && !dateMenuRef.current.contains(e.target as Node)) {
+        setDateMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDateMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [dateMenuOpen]);
+
+  const playbackFrames = useMemo(
+    () => epochFrames.filter((obs) => selectedEpochKeys.has(getEpochKey(obs))),
+    [epochFrames, selectedEpochKeys]
+  );
+
+  // Pause playback if user deselects all dates
+  useEffect(() => {
+    if (epochFrames.length > 0 && playbackFrames.length === 0 && isPlaying) {
+      setIsPlaying(false);
+    }
+  }, [epochFrames.length, playbackFrames.length, isPlaying]);
+
+  // Keep selectedObs synced to an active playback frame when selection changes
+  useEffect(() => {
+    if (playbackFrames.length === 0 || !selectedObs) return;
+    const exists = playbackFrames.some(
+      (o) => o.obs_id === selectedObs.obs_id && o.bandpass === selectedObs.bandpass
+    );
+    if (!exists) {
+      onSelectVersionObservation(activeCollection, playbackFrames[0]);
+    }
+  }, [playbackFrames, selectedObs, activeCollection, onSelectVersionObservation]);
+
   const activeEpochIdx = useMemo(() => {
     if (epochFrames.length === 0) return fallbackEpochIdx;
+    if (playbackFrames.length === 0) return 0;
     if (!selectedObs) return 0;
-    const idx = epochFrames.findIndex(
+    const idx = playbackFrames.findIndex(
       (o) => o.obs_id === selectedObs.obs_id && o.bandpass === selectedObs.bandpass
     );
     return idx >= 0 ? idx : 0;
-  }, [epochFrames, selectedObs, fallbackEpochIdx]);
+  }, [epochFrames.length, playbackFrames, selectedObs, fallbackEpochIdx]);
+
+  const renderSignature = useMemo(() => {
+    if (!lastCoords) return "";
+    return `${lastCoords.ra.toFixed(6)}|${lastCoords.dec.toFixed(6)}|${lastCoords.size}|${stretch}|${colormap}|${subtractZodi}`;
+  }, [lastCoords, stretch, colormap, subtractZodi]);
+
+  // Clear rendered frame cache when coordinates or visual parameters change
+  useEffect(() => {
+    setEpochCutouts({});
+  }, [renderSignature]);
+
+  // Preload and cache all selected playback frames before showing the first image
+  useEffect(() => {
+    if (!secondMapOpen || secondMapTab !== "cutout" || !lastCoords || playbackFrames.length === 0) {
+      return;
+    }
+    const controller = new AbortController();
+
+    playbackFrames.forEach((obs, idx) => {
+      const frameKey = `${renderSignature}|${getEpochKey(obs)}`;
+      setEpochCutouts((prev) =>
+        prev[frameKey]?.status === "ready"
+          ? prev
+          : { ...prev, [frameKey]: { status: "loading" } }
+      );
+
+      void getRenderedCutout({
+        accessUrl: obs.access_url,
+        ra: lastCoords.ra,
+        dec: lastCoords.dec,
+        size: lastCoords.size,
+        stretch,
+        colormap,
+        subtractZodi,
+        priority: idx === 0 ? "high" : "low",
+        signal: controller.signal,
+      })
+        .then((rendered) => {
+          if (controller.signal.aborted) return;
+          setEpochCutouts((prev) => ({
+            ...prev,
+            [frameKey]: { status: "ready", cutout: rendered },
+          }));
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setEpochCutouts((prev) => ({
+            ...prev,
+            [frameKey]: { status: "error" },
+          }));
+        });
+    });
+
+    return () => controller.abort();
+  }, [
+    secondMapOpen,
+    secondMapTab,
+    playbackFrames,
+    renderSignature,
+    lastCoords,
+    stretch,
+    colormap,
+    subtractZodi,
+  ]);
+
+  const settledPlaybackCount = useMemo(() => {
+    if (playbackFrames.length === 0) return 0;
+    return playbackFrames.filter((obs) => {
+      const st = epochCutouts[`${renderSignature}|${getEpochKey(obs)}`]?.status;
+      return st === "ready" || st === "error";
+    }).length;
+  }, [playbackFrames, epochCutouts, renderSignature]);
+
+  const allPlaybackFramesSettled =
+    playbackFrames.length > 0 && settledPlaybackCount === playbackFrames.length;
+
+  const isPreloadingAll =
+    epochFrames.length > 0 && playbackFrames.length > 0 && !allPlaybackFramesSettled;
+
+  const isWaitingForSelectedDates = epochFrames.length > 0 && playbackFrames.length === 0;
+
+  const activePlaybackObs = playbackFrames[activeEpochIdx] ?? playbackFrames[0] ?? null;
+  const activePreloadedCutout = activePlaybackObs
+    ? epochCutouts[`${renderSignature}|${getEpochKey(activePlaybackObs)}`]?.cutout ?? null
+    : null;
+
+  const displayCutout = useMemo(() => {
+    if (epochFrames.length > 0) {
+      if (!allPlaybackFramesSettled) return null;
+      return activePreloadedCutout ?? cutout;
+    }
+    return cutout;
+  }, [epochFrames.length, allPlaybackFramesSettled, activePreloadedCutout, cutout]);
 
   // Smooth crossfade tracking for Map 2
   useEffect(() => {
     if (
-      cutout?.dataUrl &&
+      displayCutout?.dataUrl &&
       lastCutoutUrlRef.current &&
-      lastCutoutUrlRef.current !== cutout.dataUrl
+      lastCutoutUrlRef.current !== displayCutout.dataUrl
     ) {
       setPrevCutoutUrl(lastCutoutUrlRef.current);
     }
-    if (cutout?.dataUrl) {
-      lastCutoutUrlRef.current = cutout.dataUrl;
+    if (displayCutout?.dataUrl) {
+      lastCutoutUrlRef.current = displayCutout.dataUrl;
     }
-  }, [cutout?.dataUrl]);
+  }, [displayCutout?.dataUrl]);
 
-  // Automatic epoch playback interval
+  // Automatic epoch playback interval (only advances once all selected frames are cached)
   useEffect(() => {
     if (!isPlaying) return;
+    if (epochFrames.length > 0 && (!allPlaybackFramesSettled || playbackFrames.length <= 1)) {
+      return;
+    }
     const intervalMs = Math.max(250, Math.round(950 / speedMultiplier));
     const timer = window.setInterval(() => {
-      if (epochFrames.length > 1) {
-        const nextIdx = (activeEpochIdx + 1) % epochFrames.length;
-        onSelectVersionObservation(activeCollection, epochFrames[nextIdx]);
-      } else {
+      if (playbackFrames.length > 1) {
+        const nextIdx = (activeEpochIdx + 1) % playbackFrames.length;
+        onSelectVersionObservation(activeCollection, playbackFrames[nextIdx]);
+      } else if (epochFrames.length === 0) {
         setFallbackEpochIdx((prev) => (prev + 1) % FALLBACK_EPOCHS.length);
       }
     }, intervalMs);
 
     return () => window.clearInterval(timer);
-  }, [isPlaying, speedMultiplier, epochFrames, activeEpochIdx, activeCollection, onSelectVersionObservation]);
+  }, [
+    isPlaying,
+    speedMultiplier,
+    epochFrames.length,
+    playbackFrames,
+    allPlaybackFramesSettled,
+    activeEpochIdx,
+    activeCollection,
+    onSelectVersionObservation,
+  ]);
 
   // Mouse wheel zoom inside Map 2 (FITS Cutout viewport)
   useEffect(() => {
@@ -308,16 +480,16 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   ]);
 
   const axisTicks = useMemo(() => {
-    if (!cutout || !lastCoords) return null;
-    return computeAxisTicks(cutout.width, cutout.height, cutout.wcs, lastCoords);
-  }, [cutout, lastCoords]);
+    if (!displayCutout || !lastCoords) return null;
+    return computeAxisTicks(displayCutout.width, displayCutout.height, displayCutout.wcs, lastCoords);
+  }, [displayCutout, lastCoords]);
 
   const currentFov = lastCoords?.size ?? 0.12;
 
   const handleDownloadPng = () => {
-    if (!cutout) return;
+    if (!displayCutout) return;
     const a = document.createElement("a");
-    a.href = cutout.dataUrl;
+    a.href = displayCutout.dataUrl;
     const name = selectedObs
       ? `spherex_${selectedObs.obs_collection}_${selectedObs.bandpass}_${selectedObs.obs_id}.png`
       : "spherex_cutout.png";
@@ -325,16 +497,60 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     a.click();
   };
 
-  const epochReadoutText = useMemo(() => {
+  const toggleEpochDate = (obs: SpherexObservation) => {
+    const key = getEpochKey(obs);
+    setSelectedEpochKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const allEpochDatesSelected =
+    epochFrames.length > 0 && selectedEpochKeys.size === epochFrames.length;
+
+  const handleToggleAllDates = () => {
+    if (allEpochDatesSelected) {
+      setSelectedEpochKeys(new Set());
+    } else {
+      setSelectedEpochKeys(new Set(epochFrames.map(getEpochKey)));
+    }
+  };
+
+  const currentDatePillLabel = useMemo(() => {
+    if (playbackFrames.length > 0) {
+      const current = playbackFrames[activeEpochIdx] ?? playbackFrames[0];
+      return current.epoch_date ?? current.obs_id;
+    }
     if (epochFrames.length > 0) {
-      const current = epochFrames[activeEpochIdx] ?? epochFrames[0];
+      return `0/${epochFrames.length}`;
+    }
+    if (selectedObs?.epoch_date) {
+      return selectedObs.epoch_date;
+    }
+    return FALLBACK_EPOCHS[fallbackEpochIdx] ?? t.chrono.noDateLabel;
+  }, [playbackFrames, activeEpochIdx, epochFrames.length, selectedObs?.epoch_date, fallbackEpochIdx, t.chrono.noDateLabel]);
+
+  const epochReadoutText = useMemo(() => {
+    if (playbackFrames.length > 0) {
+      const current = playbackFrames[activeEpochIdx] ?? playbackFrames[0];
       const dateStr = current.epoch_date ?? current.bandpass ?? "SPHEREx";
-      return `${dateStr} (t${activeEpochIdx + 1}/${epochFrames.length})`;
+      return `${dateStr} (t${activeEpochIdx + 1}/${playbackFrames.length})`;
+    }
+    if (epochFrames.length > 0) {
+      return `0/${epochFrames.length}`;
     }
     return FALLBACK_EPOCHS[fallbackEpochIdx] ?? FALLBACK_EPOCHS[0];
-  }, [epochFrames, activeEpochIdx, fallbackEpochIdx]);
+  }, [playbackFrames, epochFrames.length, activeEpochIdx, fallbackEpochIdx]);
 
-  const maxEpochSlider = Math.max(1, (epochFrames.length > 0 ? epochFrames.length : FALLBACK_EPOCHS.length) - 1);
+  const maxEpochSlider = Math.max(
+    1,
+    (epochFrames.length > 0 ? Math.max(1, playbackFrames.length) : FALLBACK_EPOCHS.length) - 1
+  );
 
   return (
     <main className="flex-1 flex flex-col gap-4 min-h-0 min-w-0">
@@ -380,19 +596,116 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
             ref={cutoutViewportRef}
             className="relative w-full h-full min-h-[280px] rounded-[22px] overflow-hidden border border-[#00D2FF]/45 bg-black shadow-2xl flex flex-col select-none overscroll-none"
           >
-            {/* Top-Left Map 2 Badge Pill */}
-            <div className="glass-panel absolute top-4 left-4 z-20 rounded-full px-3.5 py-1.5 flex items-center gap-2 text-xs font-mono text-slate-100 max-w-[58%] truncate">
-              <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24] shrink-0" />
-              <span className="font-sans font-medium text-slate-200 truncate">
-                {t.chrono.map2Title}
-              </span>
-              {selectedObs && (
-                <span className="px-1.5 py-0.5 rounded-full bg-[#00D2FF]/20 text-[#00D2FF] text-[10px] font-bold shrink-0">
-                  {selectedObs.bandpass}
+            {/* Top-Left Map 2 Current Date Pill + Playback Date Selector Dropdown */}
+            <div ref={dateMenuRef} className="absolute top-4 left-4 z-30 max-w-[58%]">
+              <button
+                type="button"
+                onClick={() => setDateMenuOpen((o) => !o)}
+                title={t.chrono.selectDatesTooltip}
+                className="glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-2 text-xs font-mono text-slate-100 hover:border-[#00D2FF]/60 transition-colors cursor-pointer max-w-full"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24] shrink-0" />
+                <Calendar className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
+                <span className="font-mono font-medium text-amber-300 truncate">
+                  {currentDatePillLabel}
                 </span>
-              )}
-              {cutoutLoading && (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00D2FF] shrink-0" />
+                {selectedObs && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#00D2FF]/20 text-[#00D2FF] text-[10px] font-bold shrink-0">
+                    {selectedObs.bandpass}
+                  </span>
+                )}
+                {(cutoutLoading || isPreloadingAll) && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00D2FF] shrink-0" />
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-200 ${
+                    dateMenuOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {dateMenuOpen && (
+                <div className="mt-2 w-72 max-w-[calc(100vw-3rem)] glass-panel rounded-2xl border border-white/15 bg-slate-950/90 backdrop-blur-xl shadow-2xl p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[11px] font-semibold text-slate-200 truncate">
+                        {t.chrono.playbackDatesTitle}
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-[10px] font-mono text-[#00D2FF]">
+                        {selectedEpochKeys.size}/{epochFrames.length}
+                      </span>
+                    </div>
+                    {epochFrames.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleToggleAllDates}
+                        className="text-[11px] font-medium text-[#00D2FF] hover:text-white cursor-pointer shrink-0"
+                      >
+                        {allEpochDatesSelected ? t.chrono.selectNoDates : t.chrono.selectAllDates}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-56 overflow-y-auto space-y-1 pr-0.5">
+                    {epochFrames.length === 0 ? (
+                      <p className="text-[11px] text-slate-400 py-2 text-center">
+                        {t.chrono.noDatesAvailable}
+                      </p>
+                    ) : (
+                      epochFrames.map((obs) => {
+                        const key = getEpochKey(obs);
+                        const isChecked = selectedEpochKeys.has(key);
+                        const isCurrent =
+                          selectedObs?.obs_id === obs.obs_id &&
+                          selectedObs?.bandpass === obs.bandpass;
+                        const frameStatus = epochCutouts[`${renderSignature}|${key}`]?.status;
+
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => toggleEpochDate(obs)}
+                            className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs transition-colors cursor-pointer ${
+                              isCurrent
+                                ? "bg-[#00D2FF]/15 border border-[#00D2FF]/40 text-white"
+                                : "hover:bg-white/[0.06] border border-transparent text-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 transition-colors ${
+                                  isChecked
+                                    ? "bg-[#00D2FF] border-[#00D2FF] text-slate-950"
+                                    : "border-slate-500 bg-transparent"
+                                }`}
+                              >
+                                {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                              </span>
+                              <span className="font-mono text-[11px] truncate">
+                                {obs.epoch_date ?? obs.obs_id}
+                              </span>
+                            </div>
+                            <span className="shrink-0 flex items-center">
+                              {frameStatus === "ready" ? (
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+                              ) : frameStatus === "loading" ? (
+                                <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF]" />
+                              ) : frameStatus === "error" ? (
+                                <span className="w-2 h-2 rounded-full bg-rose-400" />
+                              ) : null}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {epochFrames.length > 0 && selectedEpochKeys.size === 0 && (
+                    <p className="text-[10px] text-amber-300/90 pt-1 border-t border-white/10">
+                      {t.chrono.selectAtLeastOneDate}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -440,12 +753,28 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
             {/* Map 2 Content Body */}
             {secondMapTab === "cutout" ? (
               <div className="flex-1 w-full h-full flex items-center justify-center pl-14 pr-5 pt-16 pb-16 relative">
-                {cutout ? (
+                {isWaitingForSelectedDates ? (
+                  <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
+                    <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center">
+                      <Calendar className="w-5 h-5 text-amber-300" />
+                    </div>
+                    <p className="text-xs font-medium text-slate-300">
+                      {t.chrono.selectAtLeastOneDate}
+                    </p>
+                  </div>
+                ) : isPreloadingAll ? (
+                  <div className="flex flex-col items-center justify-center gap-2.5 text-slate-300 px-4 text-center">
+                    <Loader2 className="w-7 h-7 animate-spin text-[#00D2FF]" />
+                    <span className="text-xs font-medium text-slate-200">
+                      {t.chrono.preloadingFrames(settledPlaybackCount, playbackFrames.length)}
+                    </span>
+                  </div>
+                ) : displayCutout ? (
                   <div
                     className="relative border border-white/30 shadow-2xl"
                     style={{
-                      aspectRatio: `${cutout.width} / ${cutout.height}`,
-                      ...(cutout.width >= cutout.height
+                      aspectRatio: `${displayCutout.width} / ${displayCutout.height}`,
+                      ...(displayCutout.width >= displayCutout.height
                         ? { width: "100%", maxHeight: "100%" }
                         : { height: "100%", maxWidth: "100%" }),
                     }}
@@ -464,8 +793,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         />
                       )}
                       <img
-                        key={cutout.dataUrl}
-                        src={cutout.dataUrl}
+                        key={displayCutout.dataUrl}
+                        src={displayCutout.dataUrl}
                         alt={t.viewer.altCutout}
                         style={{
                           transform: `scale(${cutoutZoom})`,
@@ -570,7 +899,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
                   {/* Zoom & Download Actions */}
                   <div className="flex items-center gap-1.5 pointer-events-auto">
-                    {cutout && (
+                    {displayCutout && (
                       <>
                         <button
                           type="button"
@@ -582,7 +911,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           <span className="hidden sm:inline">PNG</span>
                         </button>
                         <a
-                          href={cutout.fits_cutout_url}
+                          href={displayCutout.fits_cutout_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="btn-press glass-panel rounded-full px-2.5 py-1 text-[11px] text-[#00D2FF] hover:text-white flex items-center gap-1"
@@ -771,9 +1100,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 if (!secondMapOpen) {
                   onToggleSecondMap(true);
                 }
-                if (epochFrames.length > 0 && epochFrames[idx]) {
-                  onSelectVersionObservation(activeCollection, epochFrames[idx]);
-                } else {
+                if (playbackFrames.length > 0 && playbackFrames[idx]) {
+                  onSelectVersionObservation(activeCollection, playbackFrames[idx]);
+                } else if (epochFrames.length === 0) {
                   setFallbackEpochIdx(idx);
                 }
               }}

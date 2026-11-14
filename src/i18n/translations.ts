@@ -119,6 +119,7 @@ export interface Translations {
     mocDeepLabel: string;
     footprintsLabel: string;
     gridLabel: string;
+    allSkyButton: string;
     centerOnTarget: string;
     searchHereButton: string;
     doubleClickHint: string;
@@ -237,6 +238,14 @@ export interface Translations {
     map1Title: string;
     map2Title: string;
     customSkyPatch: string;
+    playbackDatesTitle: string;
+    selectAllDates: string;
+    selectNoDates: string;
+    selectAtLeastOneDate: string;
+    noDatesAvailable: string;
+    preloadingFrames: (loaded: number, total: number) => string;
+    selectDatesTooltip: string;
+    noDateLabel: string;
     molecules: {
       h2o: string;
       co2: string;
@@ -380,6 +389,7 @@ export const translations: Record<Language, Translations> = {
       mocDeepLabel: "Cobertura MOC Deep Field",
       footprintsLabel: "Huellas FITS (s_region)",
       gridLabel: "Malla RA/Dec",
+      allSkyButton: "Vista All-Sky (Aitoff)",
       centerOnTarget: "Centrar en objetivo",
       searchHereButton: "Consultar FITS en el centro del mapa",
       doubleClickHint:
@@ -512,6 +522,14 @@ export const translations: Record<Language, Translations> = {
       map1Title: "Mapa 1 · Cielo HiPS / MOC",
       map2Title: "Mapa 2 · Recorte FITS y Épocas",
       customSkyPatch: "Sector Celeste Personalizado",
+      playbackDatesTitle: "Fechas de reproducción",
+      selectAllDates: "Todas",
+      selectNoDates: "Ninguna",
+      selectAtLeastOneDate: "Selecciona al menos una fecha para reproducir",
+      noDatesAvailable: "No hay fechas disponibles",
+      preloadingFrames: (loaded, total) => `Guardando imágenes (${loaded}/${total})...`,
+      selectDatesTooltip: "Seleccionar fechas para el video",
+      noDateLabel: "Sin fecha",
       molecules: {
         h2o: "Hielo de agua (H₂O)",
         co2: "Dióxido de carbono (CO₂)",
@@ -749,6 +767,7 @@ export const translations: Record<Language, Translations> = {
       mocDeepLabel: "Deep Field MOC Coverage",
       footprintsLabel: "FITS Footprints (s_region)",
       gridLabel: "RA/Dec Grid",
+      allSkyButton: "All-Sky View (Aitoff)",
       centerOnTarget: "Center on target",
       searchHereButton: "Query FITS at map center",
       doubleClickHint:
@@ -881,6 +900,14 @@ export const translations: Record<Language, Translations> = {
       map1Title: "Map 1 · HiPS / MOC Sky",
       map2Title: "Map 2 · FITS Cutout & Epochs",
       customSkyPatch: "Custom Sky Patch",
+      playbackDatesTitle: "Playback dates",
+      selectAllDates: "All",
+      selectNoDates: "None",
+      selectAtLeastOneDate: "Select at least one date to play",
+      noDatesAvailable: "No dates available",
+      preloadingFrames: (loaded, total) => `Caching images (${loaded}/${total})...`,
+      selectDatesTooltip: "Select dates for video playback",
+      noDateLabel: "No date",
       molecules: {
         h2o: "Water Ice (H₂O)",
         co2: "Carbon Dioxide (CO₂)",
