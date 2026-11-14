@@ -114,3 +114,34 @@ export interface ResolvedCelestialObject {
   aliases: string[];
   resolverSource: string;
 }
+
+export type DetectorId = "D1" | "D2" | "D3" | "D4" | "D5" | "D6";
+
+export interface DetectorMetadata {
+  id: DetectorId;
+  name: string;
+  nameEn?: string;
+  waveMin: number;
+  waveMax: number;
+  bandsCount: number;
+  resolvingPower: string;
+  simpleDescription: string;
+  simpleDescriptionEn?: string;
+  scientificDescription: string;
+  scientificDescriptionEn?: string;
+  targetMolecules: string[];
+  targetMoleculesEn?: string[];
+  teffKelvin: string;
+  colorHex: string;
+}
+
+export interface SpectrumDataPoint {
+  obs_id: string;
+  bandpass: string;
+  detector: string;
+  wave_um: number;
+  flux: number;
+  unit: string;
+  snr: number | null;
+  mjd: number | null;
+}

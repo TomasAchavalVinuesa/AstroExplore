@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -17,6 +17,7 @@ import type {
 } from "../lib/types";
 import { parseDec, parseRA } from "../lib/coordinates";
 import { useLanguage } from "../i18n/LanguageContext";
+import { ShareButton } from "./ShareButton";
 
 export interface MoleculeSignature {
   id: "h2o" | "co2" | "co" | "ch3oh" | "ch4" | "nh3" | "pahs";
@@ -77,6 +78,7 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   setRaInput,
   decInput,
   setDecInput,
+  collectionMode = "spherex_dr1",
   band,
   setBand,
   size,
@@ -499,6 +501,19 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
                   <span className="text-[#00D2FF] font-mono">→</span>
                 </button>
               )}
+
+              <div className="pt-1">
+                <ShareButton
+                  ra={raInput}
+                  dec={decInput}
+                  collection={collectionMode}
+                  band={band}
+                  size={size}
+                  stretch={stretch}
+                  colormap={colormap}
+                  subtractZodi={subtractZodi}
+                />
+              </div>
             </div>
           )}
         </div>

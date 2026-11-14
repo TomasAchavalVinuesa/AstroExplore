@@ -194,3 +194,495 @@ input[type="range"].apple-slider::-moz-range-thumb:active {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 210, 255, 0.48);
 }
+
+
+/* ========================================================
+   CHRONO-SPHEREx SCIENCE MODULES (Detectors, SED, Blink)
+   ======================================================== */
+/* ========================================================
+   TABS & INTERACTIVE SCIENCE MODULES
+   ======================================================== */
+.viewer-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  border-bottom: 1px solid rgba(30, 41, 59, 0.8);
+  padding-bottom: 0.4rem;
+  overflow-x: auto;
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #94a3b8;
+  font-size: 0.84rem;
+  font-weight: 600;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.tab-btn:hover {
+  color: #f1f5f9;
+}
+.tab-btn.active {
+  color: #38bdf8;
+  border-bottom-color: #38bdf8;
+}
+.tab-content {
+  margin-top: 1rem;
+}
+/* ========================================================
+   DETECTOR GUIDE (D1 - D6) & 102 BANDS
+   ======================================================== */
+.detector-guide-container {
+  background: #020617;
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 12px;
+  padding: 1.1rem;
+}
+.detector-guide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.detector-guide-header h4 {
+  margin: 0;
+  font-size: 0.96rem;
+  color: #f8fafc;
+  font-weight: 700;
+}
+.detector-subtitle {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.detector-snr-badge {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.76rem;
+  text-align: right;
+  white-space: nowrap;
+}
+.detector-snr-badge span {
+  color: #94a3b8;
+  display: block;
+}
+.detector-snr-badge strong {
+  color: #38bdf8;
+}
+.spectrum-bar {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.spectrum-segment {
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 0.55rem 0.35rem;
+  cursor: pointer;
+  text-align: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.spectrum-segment:hover {
+  transform: translateY(-2px);
+}
+.spectrum-segment.selected {
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.3);
+}
+.spectrum-segment-id {
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.spectrum-segment-wave {
+  font-size: 0.7rem;
+  opacity: 0.85;
+  margin-top: 0.15rem;
+}
+.detector-detail-card {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+}
+.detector-detail-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.detector-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.detector-chip-tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid;
+}
+.detector-name {
+  font-size: 0.9rem;
+  color: #f1f5f9;
+}
+.detector-resolving {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+.detector-resolving code {
+  color: #38bdf8;
+  background: rgba(2, 6, 23, 0.6);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+.detector-desc {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+  margin: 0.3rem 0 0.75rem;
+}
+.detector-pills-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.detector-signatures {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.pills-label {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.molecule-pill {
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.72rem;
+}
+.teff-badge {
+  background: rgba(251, 146, 60, 0.15);
+  color: #fb923c;
+  padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+/* ========================================================
+   SPECTRAL PROFILE (SED)
+   ======================================================== */
+.spectral-profile-card {
+  background: #020617;
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 12px;
+  padding: 1.1rem;
+}
+.spectral-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.spectral-header h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #f8fafc;
+  font-weight: 700;
+}
+.spectral-sub {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.spectral-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.wien-pill {
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  color: #fed7aa;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.wien-pill strong {
+  color: #fb923c;
+}
+.wien-pill small {
+  color: #fdba74;
+}
+.btn-scan {
+  background: linear-gradient(135deg, #818cf8, #38bdf8);
+  color: #020617;
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+}
+.btn-scan:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.btn-scan:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.spectral-svg-wrapper {
+  position: relative;
+  width: 100%;
+}
+.spectral-svg {
+  width: 100%;
+  height: auto;
+  max-height: 250px;
+  display: block;
+}
+.spectral-tooltip {
+  position: absolute;
+  top: 15px;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid #38bdf8;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.74rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+}
+.tooltip-band {
+  color: #38bdf8;
+  margin-bottom: 0.2rem;
+}
+.tooltip-flux strong {
+  color: #ffffff;
+}
+.tooltip-unloaded {
+  color: #94a3b8;
+  font-style: italic;
+}
+.tooltip-teff {
+  color: #fb923c;
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+}
+.spectral-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(30, 41, 59, 0.8);
+  font-size: 0.75rem;
+}
+.spectral-count {
+  color: #38bdf8;
+  font-weight: 600;
+}
+.spectral-hint {
+  color: #94a3b8;
+}
+/* ========================================================
+   BLINK COMPARATOR & DIFFERENCE MODE
+   ======================================================== */
+.blink-comparator-card {
+  background: #020617;
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 12px;
+  padding: 1.1rem;
+}
+.blink-placeholder {
+  padding: 1.5rem;
+  text-align: center;
+  border: 1px dashed rgba(30, 41, 59, 0.8);
+  border-radius: 8px;
+}
+.blink-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.blink-header h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #f8fafc;
+  font-weight: 700;
+}
+.blink-desc {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.btn-blink-toggle {
+  background: linear-gradient(135deg, #38bdf8, #0284c7);
+  color: #031525;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-blink-toggle.active {
+  background: #f87171;
+  color: #450a0a;
+}
+.blink-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 8px;
+  margin-bottom: 0.85rem;
+}
+.blink-speed-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.speed-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-right: 0.2rem;
+}
+.epoch-pickers {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+.epoch-pickers label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: #94a3b8;
+}
+.epoch-pickers select {
+  background: #020617;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.78rem;
+}
+.diff-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: #818cf8;
+  font-weight: 600;
+  cursor: pointer;
+}
+.diff-view-wrapper {
+  margin-top: 0.5rem;
+}
+.diff-canvas-box {
+  text-align: center;
+  background: #000000;
+  border: 1px solid rgba(30, 41, 59, 0.8);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+.diff-canvas {
+  max-width: 100%;
+  max-height: 400px;
+  image-rendering: pixelated;
+  border-radius: 4px;
+}
+.diff-legend {
+  margin-top: 0.5rem;
+  font-size: 0.74rem;
+  color: #94a3b8;
+}
+.diff-legend span {
+  color: #38bdf8;
+  font-weight: 600;
+}
+.diff-loading {
+  padding: 1.5rem;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+.blink-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.active-epoch-tag strong {
+  color: #38bdf8;
+}
+.mjd-tag {
+  margin-left: 0.6rem;
+  background: rgba(129, 140, 248, 0.15);
+  color: #818cf8;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+.blink-step-buttons {
+  display: flex;
+  gap: 0.4rem;
+}
+/* ========================================================
+   SHARE BUTTON & PERMALINK
+   ======================================================== */
+.share-wrapper {
+  margin-top: 0.85rem;
+}
+.btn-share {
+  width: 100%;
+  background: #1e293b;
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-share:hover {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: #38bdf8;
+}
+.btn-share.copied {
+  background: rgba(52, 211, 153, 0.15);
+  border-color: #34d399;
+  color: #34d399;
+}

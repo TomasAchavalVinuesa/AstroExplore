@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
   ControlsPanel,
@@ -382,6 +382,43 @@ export default function App() {
     });
     return () => controller.abort();
   }, [cutoutLoading, cutout, lastCoords, observations, selectedIdx]);
+
+  // Permalinks: Parse URL parameters on initial load
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const urlRa = params.get("ra");
+    const urlDec = params.get("dec");
+    const urlCol = params.get("collection") as CollectionQueryMode | null;
+    const urlBand = params.get("band");
+    const urlSize = params.get("size");
+    const urlStretch = params.get("stretch") as StretchMode | null;
+    const urlCmap = params.get("colormap") as ColormapName | null;
+    const urlZodi = params.get("subtract_zodi");
+
+    if (urlRa && urlDec) {
+      setRaInput(urlRa);
+      setDecInput(urlDec);
+      if (urlCol) setCollectionMode(urlCol);
+      if (urlBand) setBand(urlBand);
+      if (urlSize) setSize(urlSize);
+      if (urlStretch) setStretch(urlStretch);
+      if (urlCmap) setColormap(urlCmap);
+      if (urlZodi !== null) setSubtractZodi(urlZodi === "true");
+
+      setCurrentScreen("explorer");
+      setSecondMapOpen(true);
+
+      void executeSearch(
+        urlRa,
+        urlDec,
+        urlCol || "spherex_dr1",
+        urlBand || "all",
+        radius,
+        urlSize || size
+      );
+    }
+  }, [executeSearch, radius, size]);
 
   // Launch from Screen 1 (Entry) -> Screen 2 (Loading) -> Screen 3 (Explorer)
   const launchExplorer = useCallback(async () => {

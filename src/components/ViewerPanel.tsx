@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Download,
@@ -7,6 +7,7 @@ import {
   Image as ImageIcon,
   Info,
   Loader2,
+  Play,
   RotateCcw,
   Sparkles,
   X,
@@ -27,6 +28,9 @@ import { getRenderedCutout } from "../lib/irsa";
 import { useLanguage } from "../i18n/LanguageContext";
 import { HipsSkyMapPanel } from "./HipsSkyMapPanel";
 import { MultiVersionGallery } from "./MultiVersionGallery";
+import { DetectorGuide } from "./DetectorGuide";
+import { SpectralProfile } from "./SpectralProfile";
+import { BlinkComparator } from "./BlinkComparator";
 
 interface ViewerPanelProps {
   selectedObs: SpherexObservation | null;
@@ -74,9 +78,12 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   onSelectVersionObservation,
   onQueryAtCoords,
 }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const isEn = language === "en";
   const [cutoutZoom, setCutoutZoom] = useState<number>(1);
-  const [secondMapTab, setSecondMapTab] = useState<"cutout" | "bands">("cutout");
+  const [secondMapTab, setSecondMapTab] = useState<
+    "cutout" | "bands" | "sed" | "blink" | "guide"
+  >("cutout");
   const [showGalleryModal, setShowGalleryModal] = useState<boolean>(false);
 
   // Floating Epoch Playback Bar state
@@ -91,12 +98,76 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     Record<string, { status: "loading" | "ready" | "error"; cutout?: RenderedCutout }>
   >({});
 
+
+
+  // Caching for Instant SED Spectra and Blink Comparator
+  const [cachedCutoutsMap, setCachedCutoutsMap] = useState<Map<string, RenderedCutout>>(new Map());
+  const [isScanningBands, setIsScanningBands] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null);
+
+  useEffect(() => {
+    if (selectedObs && cutout) {
+      setCachedCutoutsMap((prev) => new Map(prev).set(selectedObs.obs_id, cutout));
+    }
+  }, [selectedObs, cutout]);
+
+  const cachedImages = useMemo(() => {
+    const map = new Map<string, string>();
+    cachedCutoutsMap.forEach((v, k) => map.set(k, v.dataUrl));
+    return map;
+  }, [cachedCutoutsMap]);
+
+  const cachedFluxes = useMemo(() => {
+    const map = new Map<string, { flux: number; unit: string; snr: number | null; mjd: number | null }>();
+    cachedCutoutsMap.forEach((v, k) => {
+      map.set(k, { flux: v.stats.median, unit: v.stats.unit, snr: null, mjd: null });
+    });
+    return map;
+  }, [cachedCutoutsMap]);
+
+
+
   const cutoutViewportRef = useRef<HTMLDivElement | null>(null);
 
   const observations = useMemo(
     () => versions?.[activeCollection]?.observations ?? [],
     [versions, activeCollection]
   );
+
+  const selectedIdx = observations.findIndex(
+    (o) => o.obs_id === selectedObs?.obs_id && o.bandpass === selectedObs?.bandpass
+  );
+
+  const handleScanAllBands = async () => {
+    if (!lastCoords || isScanningBands || observations.length === 0) return;
+    setIsScanningBands(true);
+    let done = 0;
+    const total = observations.length;
+    setScanProgress({ current: 0, total });
+
+    for (const obs of observations) {
+      if (!cachedCutoutsMap.has(obs.obs_id)) {
+        try {
+          const rendered = await getRenderedCutout({
+            accessUrl: obs.access_url,
+            ra: lastCoords.ra,
+            dec: lastCoords.dec,
+            size: lastCoords.size,
+            stretch,
+            colormap,
+            subtractZodi,
+            priority: "low",
+          });
+          setCachedCutoutsMap((prev) => new Map(prev).set(obs.obs_id, rendered));
+        } catch {
+          // ignore individual timeout
+        }
+      }
+      done++;
+      setScanProgress({ current: done, total });
+    }
+    setIsScanningBands(false);
+  };
 
   // Build chronological epoch list from current observations (or fallback)
   const epochFrames = useMemo(() => {
@@ -561,7 +632,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : secondMapTab === "bands" ? (
               /* Map 2 Tab: 6 Spectral Bands (D1 - D6) Grid */
               <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-2.5 items-start">
                 {bandRepresentatives.map((obs) => {
@@ -612,6 +683,41 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                     </button>
                   );
                 })}
+              </div>
+            ) : secondMapTab === "sed" ? (
+              <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto">
+                <SpectralProfile
+                  observations={observations}
+                  cachedFluxes={cachedFluxes}
+                  selectedObsId={selectedObs?.obs_id ?? ""}
+                  onSelectObsId={(obsId) => {
+                    const target = observations.find((o) => o.obs_id === obsId);
+                    if (target) onSelectVersionObservation(activeCollection, target);
+                  }}
+                  onScanAllBands={handleScanAllBands}
+                  isScanning={isScanningBands}
+                  scanProgress={scanProgress}
+                />
+              </div>
+            ) : secondMapTab === "blink" ? (
+              <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto">
+                <BlinkComparator
+                  observations={observations}
+                  selectedIdx={selectedIdx >= 0 ? selectedIdx : 0}
+                  onSelectIndex={(idx) => {
+                    const target = observations[idx];
+                    if (target) onSelectVersionObservation(activeCollection, target);
+                  }}
+                  cachedImages={cachedImages}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto">
+                <DetectorGuide
+                  currentBand="all"
+                  onSelectBand={() => {}}
+                  selectedObsBandpass={selectedObs?.bandpass}
+                />
               </div>
             )}
           </div>
