@@ -1,4 +1,4 @@
-﻿# dependencies
+# dependencies
 node_modules/
 /.pnp
 .pnp.*
@@ -6,11 +6,8 @@ node_modules/
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
-
-# production
+# production / build
+dist/
 /build
 
 # misc
@@ -26,27 +23,5 @@ yarn-error.log*
 # local env files
 .env*.local
 
-# vercel
-.vercel
-
 # typescript
 *.tsbuildinfo
-
-# python
-__pycache__/
-*.py[cod]
-*.class
-*.so
-.Python
-env/
-venv/
-.venv/
-ENV/
-build/
-dist/
-*.egg-info/
-
-# auto-sync files
-auto-sync.log
-*.pid
-

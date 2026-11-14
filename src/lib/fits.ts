@@ -1,5 +1,4 @@
-import zlib from "node:zlib";
-import type { ColormapName, CutoutStats, StretchMode } from "./types";
+import type { ColormapName, CutoutStats, RenderedCutout, StretchMode } from "./types";
 
 interface FitsHdu {
   name: string;
@@ -35,17 +34,35 @@ function parseHeaderCard(card: string): { key: string; value: string } | null {
   return { key, value: raw };
 }
 
-function parseFitsHdus(buf: Buffer): FitsHdu[] {
+/**
+ * Descomprime gzip usando el API estándar web DecompressionStream si viene comprimido.
+ */
+export async function decompressIfNeeded(arrayBuffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const bytes = new Uint8Array(arrayBuffer);
+  // Cabecera GZIP: 0x1F, 0x8B
+  if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    if (typeof DecompressionStream !== "undefined") {
+      const ds = new DecompressionStream("gzip");
+      const stream = new Response(arrayBuffer).body!.pipeThrough(ds);
+      return await new Response(stream).arrayBuffer();
+    }
+  }
+  return arrayBuffer;
+}
+
+function parseFitsHdus(buffer: ArrayBuffer): FitsHdu[] {
+  const bytes = new Uint8Array(buffer);
+  const textDecoder = new TextDecoder("ascii");
   const hdus: FitsHdu[] = [];
   let offset = 0;
 
-  while (offset + FITS_BLOCK <= buf.length) {
+  while (offset + FITS_BLOCK <= bytes.length) {
     const header: Record<string, string> = {};
     let foundEnd = false;
     let headerOffset = offset;
 
-    while (headerOffset + FITS_BLOCK <= buf.length) {
-      const block = buf.subarray(headerOffset, headerOffset + FITS_BLOCK).toString("ascii");
+    while (headerOffset + FITS_BLOCK <= bytes.length) {
+      const block = textDecoder.decode(bytes.subarray(headerOffset, headerOffset + FITS_BLOCK));
       for (let i = 0; i < 36; i++) {
         const card = block.slice(i * 80, (i + 1) * 80);
         if (card.slice(0, 8).trim() === "END") {
@@ -96,9 +113,10 @@ function parseFitsHdus(buf: Buffer): FitsHdu[] {
   return hdus;
 }
 
-function readImagePixels(buf: Buffer, hdu: FitsHdu): Float64Array {
+function readImagePixels(buffer: ArrayBuffer, hdu: FitsHdu): Float64Array {
   const count = hdu.naxis1 * hdu.naxis2;
   const out = new Float64Array(count);
+  const view = new DataView(buffer);
   const bscale = hdu.bscale;
   const bzero = hdu.bzero;
   const start = hdu.dataOffset;
@@ -107,19 +125,19 @@ function readImagePixels(buf: Buffer, hdu: FitsHdu): Float64Array {
     let val: number;
     switch (hdu.bitpix) {
       case -32:
-        val = buf.readFloatBE(start + i * 4);
+        val = view.getFloat32(start + i * 4, false); // Big-Endian
         break;
       case -64:
-        val = buf.readDoubleBE(start + i * 8);
+        val = view.getFloat64(start + i * 8, false);
         break;
       case 32:
-        val = buf.readInt32BE(start + i * 4);
+        val = view.getInt32(start + i * 4, false);
         break;
       case 16:
-        val = buf.readInt16BE(start + i * 2);
+        val = view.getInt16(start + i * 2, false);
         break;
       case 8:
-        val = buf.readUInt8(start + i);
+        val = view.getUint8(start + i);
         break;
       default:
         val = Number.NaN;
@@ -212,73 +230,16 @@ function applyStretch(norm: number, mode: StretchMode): number {
   }
 }
 
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buf: Buffer): number {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) {
-    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  }
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const typeBuf = Buffer.from(type, "ascii");
-  const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
-}
-
-function encodePngRgb(width: number, height: number, rgb: Uint8Array): Buffer {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // color type: RGB
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-
-  const stride = width * 3;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let y = 0; y < height; y++) {
-    const rowStart = y * (stride + 1);
-    raw[rowStart] = 0; // filter type None
-    raw.set(rgb.subarray(y * stride, (y + 1) * stride), rowStart + 1);
-  }
-
-  const compressed = zlib.deflateSync(raw);
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-export function renderFitsCutout(
-  fitsBuffer: Buffer,
+export function renderFitsBuffer(
+  rawBuffer: ArrayBuffer,
   options: {
     stretch: StretchMode;
     colormap: ColormapName;
     subtractZodi: boolean;
+    fitsCutoutUrl: string;
   }
-): { pngBase64: string; width: number; height: number; stats: CutoutStats } {
-  const hdus = parseFitsHdus(fitsBuffer);
+): RenderedCutout {
+  const hdus = parseFitsHdus(rawBuffer);
   const imageHdu = hdus.find((h) => h.name === "IMAGE" && h.naxis === 2);
   if (!imageHdu) {
     throw new Error("El archivo FITS no contiene extensión IMAGE 2D.");
@@ -290,12 +251,12 @@ export function renderFitsCutout(
     throw new Error("Dimensiones de imagen FITS inválidas.");
   }
 
-  const data = readImagePixels(fitsBuffer, imageHdu);
+  const data = readImagePixels(rawBuffer, imageHdu);
   const zodiHdu = hdus.find((h) => h.name === "ZODI" && h.naxis === 2);
   const hasZodi = Boolean(zodiHdu && zodiHdu.naxis1 === width && zodiHdu.naxis2 === height);
 
   if (options.subtractZodi && hasZodi && zodiHdu) {
-    const zodi = readImagePixels(fitsBuffer, zodiHdu);
+    const zodi = readImagePixels(rawBuffer, zodiHdu);
     for (let i = 0; i < data.length; i++) {
       data[i] = data[i] - zodi[i];
     }
@@ -306,14 +267,15 @@ export function renderFitsCutout(
     if (Number.isFinite(data[i])) finiteVals.push(data[i]);
   }
   if (finiteVals.length === 0) {
-    throw new Error("Todos los píxeles del recorte son NaN/Inf.");
+    throw new Error("Todos los píxeles del recorte son NaN o vacíos.");
   }
 
   finiteVals.sort((a, b) => a - b);
   const n = finiteVals.length;
   const min = finiteVals[0];
   const max = finiteVals[n - 1];
-  const median = n % 2 === 1 ? finiteVals[(n - 1) / 2] : (finiteVals[n / 2 - 1] + finiteVals[n / 2]) / 2;
+  const median =
+    n % 2 === 1 ? finiteVals[(n - 1) / 2] : (finiteVals[n / 2 - 1] + finiteVals[n / 2]) / 2;
   const sum = finiteVals.reduce((acc, v) => acc + v, 0);
   const mean = sum / n;
 
@@ -327,10 +289,21 @@ export function renderFitsCutout(
   const scale = maxDim < 512 ? Math.max(1, Math.floor(512 / maxDim)) : 1;
   const outW = width * scale;
   const outH = height * scale;
-  const rgb = new Uint8Array(outW * outH * 3);
+
+  // Renderizar a un Canvas offscreen / ImageData RGBA nativo
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("No se pudo inicializar contexto 2D de Canvas.");
+  }
+
+  const imgData = ctx.createImageData(outW, outH);
+  const pixels = imgData.data;
 
   for (let y = 0; y < height; y++) {
-    // Flip vertically so FITS origin matches astronomical North-up display
+    // Flip vertical: FITS almacena el origen abajo a la izquierda (Astronomical North-up)
     const srcRow = height - 1 - y;
     for (let x = 0; x < width; x++) {
       const val = data[srcRow * width + x];
@@ -351,18 +324,22 @@ export function renderFitsCutout(
         const py = y * scale + sy;
         for (let sx = 0; sx < scale; sx++) {
           const px = x * scale + sx;
-          const outIdx = (py * outW + px) * 3;
-          rgb[outIdx] = r;
-          rgb[outIdx + 1] = g;
-          rgb[outIdx + 2] = b;
+          const outIdx = (py * outW + px) * 4;
+          pixels[outIdx] = r;
+          pixels[outIdx + 1] = g;
+          pixels[outIdx + 2] = b;
+          pixels[outIdx + 3] = 255;
         }
       }
     }
   }
 
-  const png = encodePngRgb(outW, outH, rgb);
+  ctx.putImageData(imgData, 0, 0);
+  const dataUrl = canvas.toDataURL("image/png");
+
   return {
-    pngBase64: png.toString("base64"),
+    imageData: imgData,
+    dataUrl,
     width,
     height,
     stats: {
@@ -375,5 +352,6 @@ export function renderFitsCutout(
       shape: [width, height],
       has_zodi: hasZodi,
     },
+    fits_cutout_url: options.fitsCutoutUrl,
   };
 }

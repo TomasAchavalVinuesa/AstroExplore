@@ -56,3 +56,28 @@ export function parseDec(raw: string): number | null {
   const deg = sign * (d + m / 60 + sec / 3600);
   return deg >= -90 && deg <= 90 ? deg : null;
 }
+
+/**
+ * Convierte grados a formato sexagesimal HMS (para RA)
+ */
+export function formatRAtoHMS(deg: number): string {
+  const hoursTotal = deg / 15;
+  const h = Math.floor(hoursTotal);
+  const minutesTotal = (hoursTotal - h) * 60;
+  const m = Math.floor(minutesTotal);
+  const s = ((minutesTotal - m) * 60).toFixed(3);
+  return `${String(h).padStart(2, "0")}h${String(m).padStart(2, "0")}m${s.padStart(6, "0")}s`;
+}
+
+/**
+ * Convierte grados a formato sexagesimal DMS (para Dec)
+ */
+export function formatDectoDMS(deg: number): string {
+  const sign = deg < 0 ? "-" : "+";
+  const abs = Math.abs(deg);
+  const d = Math.floor(abs);
+  const minutesTotal = (abs - d) * 60;
+  const m = Math.floor(minutesTotal);
+  const s = ((minutesTotal - m) * 60).toFixed(2);
+  return `${sign}${String(d).padStart(2, "0")}°${String(m).padStart(2, "0")}'${s.padStart(5, "0")}"`;
+}

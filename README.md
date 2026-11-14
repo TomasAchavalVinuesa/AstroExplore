@@ -1,21 +1,38 @@
-# SPHEREx Explorer — Next.js + TypeScript
+# SPHEREx Explorer — React + Vite & Tailwind CSS
 
-Aplicación web desarrollada con **Next.js (App Router)**, **TypeScript** y **Node.js** para consultar y visualizar recortes de imágenes espectrales de **NASA SPHEREx** ingresando coordenadas celestes (**Ascensión Recta** y **Declinación** en grados decimales o formato sexagesimal `HMS`/`DMS`).
+Aplicación web desarrollada con **React 19**, **Vite**, **TypeScript** y **Tailwind CSS** para consultar, explorar y visualizar recortes de imágenes espectrales astronómicas de la misión **NASA SPHEREx** a partir de coordenadas celestes (**Ascensión Recta** y **Declinación** en grados decimales o formato sexagesimal `HMS`/`DMS`).
 
-## APIs de IRSA utilizadas
-- **IRSA SIA:** `https://irsa.ipac.caltech.edu/SIA` (`COLLECTION=spherex_dr1`, `spherex_dr1_deep`, `spherex_qr3`)
-- **IRSA IBE Cutouts:** `{access_url}?center={RA},{Dec}d&size={SIZE}`
+## Características
+- **Tecnología moderna:** React + Vite + Tailwind CSS (rápido, sin dependencias pesadas de servidor).
+- **Procesamiento de datos FITS nativo en el cliente:** Decodificación de archivos binarios FITS de NASA / IPAC IRSA con `DataView`, lectura big-endian y descompresión gzip transparente.
+- **Visualización astronómica profesional:**
+  - Escalas de flujo (stretching): `Asinh` (astronómico por defecto), `Logarítmico`, `Raíz cuadrada` y `Lineal`.
+  - Paletas de color científico (colormaps): `Inferno`, `Viridis`, `Plasma`, `Magma` y `Escala de grises`.
+  - Sustracción de luz zodiacal (extensión `ZODI` del archivo FITS).
+  - Retícula / mira astronómica centrada sobre la coordenada consultada.
+  - Zoom interactivo con restablecimiento.
+- **Objetivos de prueba integrados:** Presets rápidos para Galaxia M101, Galaxia M51, Plano galáctico Vela/Carina, Campo profundo NEP y coordenadas sexagesimales.
+- **Exportación:** Descarga del recorte procesado en PNG y enlace directo para descargar el archivo FITS original.
+
+## APIs oficiales de NASA/IPAC IRSA
+- **IRSA SIA (Simple Image Access):** Consulta del catálogo de observaciones por coordenadas celestes (`spherex_dr1`, `spherex_dr1_deep`, `spherex_qr3`).
+- **IRSA IBE Cutouts:** Extracción y descarga de recortes FITS espectrales según coordenadas y dimensiones en grados.
 
 ## Cómo ejecutar
+
+1. Instalar dependencias:
 ```powershell
 npm install
+```
+
+2. Iniciar el servidor de desarrollo Vite:
+```powershell
 npm run dev
 ```
-Luego abre `http://localhost:3000` en tu navegador.
+Abre `http://localhost:5173` en tu navegador.
 
-## 🔄 Sincronización Automática con GitHub
-Este proyecto cuenta con un sistema de sincronización automática en segundo plano:
-- iniciar-auto-sync.bat: Inicia el monitor en segundo plano (detecta cambios y sube automáticamente a GitHub).
-- detener-auto-sync.bat: Detiene el monitor en segundo plano.
-- er-estado-auto-sync.bat: Muestra el estado del servicio y el registro de sincronizaciones (uto-sync.log).
-- uto-commit-push.bat: Ejecuta un commit y push manual inmediato en 1 solo clic.
+3. Compilar para producción:
+```powershell
+npm run build
+```
+Los archivos optimizados se generarán en la carpeta `dist/`.

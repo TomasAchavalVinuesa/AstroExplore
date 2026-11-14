@@ -36,8 +36,9 @@ export interface CutoutStats {
   has_zodi: boolean;
 }
 
-export interface CutoutResponse {
-  image_base64: string;
+export interface RenderedCutout {
+  imageData: ImageData;
+  dataUrl: string;
   width: number;
   height: number;
   stats: CutoutStats;
@@ -46,3 +47,13 @@ export interface CutoutResponse {
 
 export type StretchMode = "asinh" | "log" | "sqrt" | "linear";
 export type ColormapName = "inferno" | "viridis" | "plasma" | "magma" | "gray";
+
+export interface TargetPreset {
+  id?: string;
+  label: string;
+  category: string;
+  ra: string;
+  dec: string;
+  collection: string;
+  description: string;
+}
