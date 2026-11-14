@@ -1,25 +1,33 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navbar } from "./components/Navbar";
 import { ControlsPanel } from "./components/ControlsPanel";
 import { ViewerPanel } from "./components/ViewerPanel";
 import { ObservationsPanel } from "./components/ObservationsPanel";
 import { parseDec, parseRA } from "./lib/coordinates";
-import { getRenderedCutout, querySpherexSIA } from "./lib/irsa";
+import { resolveCelestialName } from "./lib/celestialResolver";
+import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
 import { useLanguage } from "./i18n/LanguageContext";
 import type { Translations } from "./i18n/translations";
 import type {
+  CollectionQueryMode,
+  CollectionVersionData,
   ColormapName,
   RenderedCutout,
+  ResolvedCelestialObject,
+  SpherexCollectionId,
   SpherexObservation,
   StretchMode,
   TargetPreset,
 } from "./lib/types";
 
 type StatusState =
+  | { type: "resolvingObject"; name: string }
+  | { type: "objectNotFound"; name: string }
   | { type: "downloadingFits"; band: string; id: string }
   | { type: "invalidRa" }
   | { type: "invalidDec" }
   | { type: "queryingSia"; ra: string; dec: string; collection: string }
+  | { type: "queryingAllVersions"; ra: string; dec: string }
   | { type: "noImagesFound"; collection: string; ra: string; dec: string }
   | { type: "customError"; message: string }
   | null;
@@ -39,7 +47,7 @@ export default function App() {
 
   const [raInput, setRaInput] = useState("08h55m10.831s");
   const [decInput, setDecInput] = useState("-7d14m42.53s");
-  const [collection, setCollection] = useState("spherex_dr1");
+  const [collectionMode, setCollectionMode] = useState<CollectionQueryMode>("spherex_dr1");
   const [band, setBand] = useState("all");
   const [radius, setRadius] = useState("0.05");
   const [size, setSize] = useState("0.15");
@@ -50,10 +58,19 @@ export default function App() {
   const [showCrosshair, setShowCrosshair] = useState(true);
 
   const [loading, setLoading] = useState(false);
+  const [cutoutLoading, setCutoutLoading] = useState(false);
+  const cutoutRequestIdRef = useRef(0);
+  const cutoutAbortRef = useRef<AbortController | null>(null);
+  const [resolvingName, setResolvingName] = useState(false);
+  const [resolvedObject, setResolvedObject] = useState<ResolvedCelestialObject | null>(null);
+  const [activePresetId, setActivePresetId] = useState<string | null>("wise_0855");
+
   const [statusState, setStatusState] = useState<StatusState>(null);
-  const [siaUrl, setSiaUrl] = useState("");
-  const [totalFound, setTotalFound] = useState(0);
-  const [observations, setObservations] = useState<SpherexObservation[]>([]);
+  const [versions, setVersions] = useState<Record<
+    SpherexCollectionId,
+    CollectionVersionData
+  > | null>(null);
+  const [activeCollection, setActiveCollection] = useState<SpherexCollectionId>("spherex_dr1");
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const [cutout, setCutout] = useState<RenderedCutout | null>(null);
   const [lastCoords, setLastCoords] = useState<{ ra: number; dec: number; size: number } | null>(
@@ -63,6 +80,10 @@ export default function App() {
   const status = useMemo(() => {
     if (!statusState) return null;
     switch (statusState.type) {
+      case "resolvingObject":
+        return { text: t.status.resolvingObject(statusState.name), isError: false };
+      case "objectNotFound":
+        return { text: t.status.objectNotFound(statusState.name), isError: true };
       case "downloadingFits":
         return {
           text: t.status.downloadingFits({ band: statusState.band, id: statusState.id }),
@@ -74,12 +95,19 @@ export default function App() {
         return { text: t.status.invalidDec, isError: true };
       case "queryingSia":
         return { text: t.status.queryingSia(statusState), isError: false };
+      case "queryingAllVersions":
+        return { text: t.status.queryingAllVersions(statusState), isError: false };
       case "noImagesFound":
         return { text: t.status.noImagesFound(statusState), isError: true };
       case "customError":
         return { text: translateErrorMessage(statusState.message, t), isError: true };
     }
   }, [statusState, t]);
+
+  const activeVersionData = versions ? versions[activeCollection] : null;
+  const observations = activeVersionData?.observations ?? [];
+  const totalFound = activeVersionData?.total_found ?? 0;
+  const siaUrl = activeVersionData?.sia_url ?? "";
 
   const loadCutout = useCallback(
     async (
@@ -91,6 +119,12 @@ export default function App() {
       cmapVal: ColormapName,
       zodiVal: boolean
     ) => {
+      cutoutAbortRef.current?.abort();
+      const controller = new AbortController();
+      cutoutAbortRef.current = controller;
+
+      const reqId = ++cutoutRequestIdRef.current;
+      setCutoutLoading(true);
       setStatusState({
         type: "downloadingFits",
         band: obs.bandpass || "SPHEREx",
@@ -106,14 +140,27 @@ export default function App() {
           stretch: stretchVal,
           colormap: cmapVal,
           subtractZodi: zodiVal,
+          priority: "high",
+          signal: controller.signal,
         });
+        if (reqId !== cutoutRequestIdRef.current) return;
         setCutout(rendered);
         setStatusState(null);
       } catch (err) {
+        if (
+          reqId !== cutoutRequestIdRef.current ||
+          (err instanceof DOMException && err.name === "AbortError")
+        ) {
+          return;
+        }
         setStatusState({
           type: "customError",
           message: err instanceof Error ? err.message : "",
         });
+      } finally {
+        if (reqId === cutoutRequestIdRef.current) {
+          setCutoutLoading(false);
+        }
       }
     },
     []
@@ -123,7 +170,7 @@ export default function App() {
     async (
       rawRa: string,
       rawDec: string,
-      col: string,
+      colMode: CollectionQueryMode,
       bandVal: string,
       radiusStr: string,
       sizeStr: string
@@ -147,44 +194,36 @@ export default function App() {
         type: "queryingSia",
         ra: raDeg.toFixed(5),
         dec: decDeg.toFixed(5),
-        collection: col,
+        collection: colMode,
       });
 
       try {
-        const data = await querySpherexSIA({
+        const multiData = await queryAllSpherexVersions({
           ra: raDeg,
           dec: decDeg,
           radius: radiusNum,
-          collection: col,
+          collectionMode: colMode,
           band: bandVal,
         });
 
-        setSiaUrl(data.sia_url);
-        setTotalFound(data.total_found);
-        setObservations(data.observations);
+        setVersions(multiData.versions);
+        const targetCol = multiData.recommendedCollection;
+        setActiveCollection(targetCol);
         setSelectedIdx(0);
         setLastCoords({ ra: raDeg, dec: decDeg, size: sizeNum });
 
-        if (data.observations.length === 0) {
+        const targetObsList = multiData.versions[targetCol].observations;
+
+        if (targetObsList.length === 0) {
           setCutout(null);
           setStatusState({
             type: "noImagesFound",
-            collection: col,
+            collection: "SPHEREx DR1 Wide (spherex_dr1)",
             ra: raDeg.toFixed(4),
             dec: decDeg.toFixed(4),
           });
           return;
         }
-
-        await loadCutout(
-          data.observations[0],
-          raDeg,
-          decDeg,
-          sizeNum,
-          stretch,
-          colormap,
-          subtractZodi
-        );
       } catch (err) {
         setStatusState({
           type: "customError",
@@ -194,27 +233,132 @@ export default function App() {
         setLoading(false);
       }
     },
-    [colormap, loadCutout, stretch, subtractZodi]
+    []
   );
 
   // Cambio instantáneo de escalas de flujo, paleta o zodi sobre el FITS en memoria
   useEffect(() => {
     const obs = observations[selectedIdx];
     if (!obs || !lastCoords) return;
-    loadCutout(obs, lastCoords.ra, lastCoords.dec, lastCoords.size, stretch, colormap, subtractZodi);
+    void loadCutout(
+      obs,
+      lastCoords.ra,
+      lastCoords.dec,
+      lastCoords.size,
+      stretch,
+      colormap,
+      subtractZodi
+    );
   }, [stretch, colormap, subtractZodi, selectedIdx, observations, lastCoords, loadCutout]);
+
+  // Precargar en segundo plano la observación siguiente cuando el visor principal termina
+  useEffect(() => {
+    if (cutoutLoading || !cutout || !lastCoords) return;
+    const nextObs = observations[selectedIdx + 1];
+    if (!nextObs) return;
+
+    const controller = new AbortController();
+    prefetchFitsCutout({
+      accessUrl: nextObs.access_url,
+      ra: lastCoords.ra,
+      dec: lastCoords.dec,
+      size: lastCoords.size,
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, [cutoutLoading, cutout, lastCoords, observations, selectedIdx]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    executeSearch(raInput, decInput, collection, band, radius, size);
+    setActivePresetId(null);
+    void executeSearch(raInput, decInput, collectionMode, band, radius, size);
   };
 
-  const handleSelectPreset = (preset: TargetPreset) => {
-    setRaInput(preset.ra);
-    setDecInput(preset.dec);
-    setCollection(preset.collection);
-    executeSearch(preset.ra, preset.dec, preset.collection, band, radius, size);
+  const handleSelectPreset = useCallback(
+    async (preset: TargetPreset) => {
+      setActivePresetId(preset.id);
+      setRaInput(preset.ra);
+      setDecInput(preset.dec);
+      setCollectionMode(preset.collection);
+
+      setResolvingName(true);
+      try {
+        const resolved = await resolveCelestialName(preset.queryName);
+        setResolvedObject(resolved);
+      } catch {
+        setResolvedObject(null);
+      } finally {
+        setResolvingName(false);
+      }
+
+      await executeSearch(preset.ra, preset.dec, preset.collection, band, radius, size);
+    },
+    [band, executeSearch, radius, size]
+  );
+
+  const handleSearchCelestialName = useCallback(
+    async (name: string) => {
+      setResolvingName(true);
+      setStatusState({ type: "resolvingObject", name });
+
+      const matchingPreset = t.presets.find(
+        (p) =>
+          p.label.toLowerCase() === name.toLowerCase() ||
+          p.queryName.toLowerCase() === name.toLowerCase()
+      );
+      setActivePresetId(matchingPreset?.id ?? null);
+
+      try {
+        const resolved = await resolveCelestialName(name);
+        setResolvedObject(resolved);
+        setRaInput(resolved.raHms);
+        setDecInput(resolved.decDms);
+        setCollectionMode("spherex_dr1");
+        await executeSearch(resolved.raHms, resolved.decDms, "spherex_dr1", band, radius, size);
+      } catch {
+        setStatusState({ type: "objectNotFound", name });
+      } finally {
+        setResolvingName(false);
+      }
+    },
+    [band, executeSearch, radius, size, t.presets]
+  );
+
+  const handleSelectCollection = (col: SpherexCollectionId) => {
+    setActiveCollection(col);
+    setSelectedIdx(0);
   };
+
+  const handleSelectVersionObservation = (
+    col: SpherexCollectionId,
+    targetObs: SpherexObservation
+  ) => {
+    setActiveCollection(col);
+    const colObs = versions?.[col]?.observations ?? [];
+    const foundIdx = colObs.findIndex(
+      (o) => o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass
+    );
+    setSelectedIdx(foundIdx >= 0 ? foundIdx : 0);
+  };
+
+  const handleChangeFov = useCallback((newSize: number) => {
+    const clamped = Number(Math.min(1.0, Math.max(0.02, newSize)).toFixed(3));
+    setSize(String(clamped));
+    setLastCoords((prev) => (prev ? { ...prev, size: clamped } : prev));
+  }, []);
+
+  const handleQueryAtCoords = useCallback(
+    (raDeg: number, decDeg: number) => {
+      const raStr = raDeg.toFixed(5);
+      const decStr = decDeg.toFixed(5);
+      setActivePresetId(null);
+      setResolvedObject(null);
+      setRaInput(raStr);
+      setDecInput(decStr);
+      void executeSearch(raStr, decStr, collectionMode, band, radius, size);
+    },
+    [band, collectionMode, executeSearch, radius, size]
+  );
 
   const selectedObs = observations[selectedIdx] ?? null;
 
@@ -222,14 +366,14 @@ export default function App() {
     <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col">
       <Navbar />
 
-      <main className="flex-1 max-w-[1700px] w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-[340px_1fr_320px] gap-5 items-start">
+      <main className="flex-1 max-w-[1700px] w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-[360px_1fr_320px] gap-5 items-start">
         <ControlsPanel
           raInput={raInput}
           setRaInput={setRaInput}
           decInput={decInput}
           setDecInput={setDecInput}
-          collection={collection}
-          setCollection={setCollection}
+          collectionMode={collectionMode}
+          setCollectionMode={setCollectionMode}
           band={band}
           setBand={setBand}
           radius={radius}
@@ -245,17 +389,31 @@ export default function App() {
           showCrosshair={showCrosshair}
           setShowCrosshair={setShowCrosshair}
           loading={loading}
+          resolvingName={resolvingName}
+          resolvedObject={resolvedObject}
+          activePresetId={activePresetId}
           onSubmit={handleSubmit}
           onSelectPreset={handleSelectPreset}
+          onSearchCelestialName={handleSearchCelestialName}
         />
 
         <ViewerPanel
           selectedObs={selectedObs}
           cutout={cutout}
+          cutoutLoading={cutoutLoading}
           lastCoords={lastCoords}
           showCrosshair={showCrosshair}
           status={status}
           siaUrl={siaUrl}
+          resolvedObject={resolvedObject}
+          versions={versions}
+          activeCollection={activeCollection}
+          stretch={stretch}
+          colormap={colormap}
+          subtractZodi={subtractZodi}
+          onChangeFov={handleChangeFov}
+          onSelectVersionObservation={handleSelectVersionObservation}
+          onQueryAtCoords={handleQueryAtCoords}
         />
 
         <ObservationsPanel
@@ -264,6 +422,9 @@ export default function App() {
           selectedIdx={selectedIdx}
           onSelect={(idx) => setSelectedIdx(idx)}
           loading={loading}
+          versions={versions}
+          activeCollection={activeCollection}
+          onSelectCollection={handleSelectCollection}
         />
       </main>
     </div>

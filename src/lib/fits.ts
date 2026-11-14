@@ -1,4 +1,4 @@
-import type { ColormapName, CutoutStats, RenderedCutout, StretchMode } from "./types";
+import type { ColormapName, CutoutStats, FitsWcs, RenderedCutout, StretchMode } from "./types";
 
 interface FitsHdu {
   name: string;
@@ -230,7 +230,90 @@ function applyStretch(norm: number, mode: StretchMode): number {
   }
 }
 
-export function renderFitsBuffer(
+function parseNum(header: Record<string, string>, key: string): number | null {
+  const raw = header[key];
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function extractWcsFromHeader(header: Record<string, string>): FitsWcs | null {
+  const crval1 = parseNum(header, "CRVAL1");
+  const crval2 = parseNum(header, "CRVAL2");
+  const crpix1 = parseNum(header, "CRPIX1");
+  const crpix2 = parseNum(header, "CRPIX2");
+
+  if (crval1 === null || crval2 === null || crpix1 === null || crpix2 === null) {
+    return null;
+  }
+
+  const cd1_1 = parseNum(header, "CD1_1");
+  const cd2_2 = parseNum(header, "CD2_2");
+  if (cd1_1 !== null && cd2_2 !== null) {
+    return {
+      crval1,
+      crval2,
+      crpix1,
+      crpix2,
+      cd1_1,
+      cd1_2: parseNum(header, "CD1_2") ?? 0,
+      cd2_1: parseNum(header, "CD2_1") ?? 0,
+      cd2_2,
+    };
+  }
+
+  const cdelt1 = parseNum(header, "CDELT1");
+  const cdelt2 = parseNum(header, "CDELT2");
+  if (cdelt1 === null || cdelt2 === null) {
+    return null;
+  }
+
+  const pc1_1 = parseNum(header, "PC1_1");
+  const pc2_2 = parseNum(header, "PC2_2");
+  if (pc1_1 !== null && pc2_2 !== null) {
+    const pc1_2 = parseNum(header, "PC1_2") ?? 0;
+    const pc2_1 = parseNum(header, "PC2_1") ?? 0;
+    return {
+      crval1,
+      crval2,
+      crpix1,
+      crpix2,
+      cd1_1: cdelt1 * pc1_1,
+      cd1_2: cdelt1 * pc1_2,
+      cd2_1: cdelt2 * pc2_1,
+      cd2_2: cdelt2 * pc2_2,
+    };
+  }
+
+  const crota2 = parseNum(header, "CROTA2") ?? 0;
+  const rad = (crota2 * Math.PI) / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  return {
+    crval1,
+    crval2,
+    crpix1,
+    crpix2,
+    cd1_1: cdelt1 * cosR,
+    cd1_2: -cdelt2 * sinR,
+    cd2_1: cdelt1 * sinR,
+    cd2_2: cdelt2 * cosR,
+  };
+}
+
+export interface FitsPixelResult {
+  rgba: Uint8ClampedArray;
+  outW: number;
+  outH: number;
+  width: number;
+  height: number;
+  stats: CutoutStats;
+  wcs: FitsWcs | null;
+  fitsCutoutUrl: string;
+}
+
+export function computeFitsPixels(
   rawBuffer: ArrayBuffer,
   options: {
     stretch: StretchMode;
@@ -238,7 +321,7 @@ export function renderFitsBuffer(
     subtractZodi: boolean;
     fitsCutoutUrl: string;
   }
-): RenderedCutout {
+): FitsPixelResult {
   const hdus = parseFitsHdus(rawBuffer);
   const imageHdu = hdus.find((h) => h.name === "IMAGE" && h.naxis === 2);
   if (!imageHdu) {
@@ -262,21 +345,32 @@ export function renderFitsBuffer(
     }
   }
 
-  const finiteVals: number[] = [];
+  // Contar y copiar valores finitos en Float64Array para ordenamiento numérico nativo rápido
+  let finiteCount = 0;
   for (let i = 0; i < data.length; i++) {
-    if (Number.isFinite(data[i])) finiteVals.push(data[i]);
+    if (Number.isFinite(data[i])) finiteCount++;
   }
-  if (finiteVals.length === 0) {
+  if (finiteCount === 0) {
     throw new Error("Todos los píxeles del recorte son NaN o vacíos.");
   }
 
-  finiteVals.sort((a, b) => a - b);
-  const n = finiteVals.length;
+  const finiteVals = new Float64Array(finiteCount);
+  let sum = 0;
+  let k = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (Number.isFinite(v)) {
+      finiteVals[k++] = v;
+      sum += v;
+    }
+  }
+
+  finiteVals.sort();
+  const n = finiteCount;
   const min = finiteVals[0];
   const max = finiteVals[n - 1];
   const median =
     n % 2 === 1 ? finiteVals[(n - 1) / 2] : (finiteVals[n / 2 - 1] + finiteVals[n / 2]) / 2;
-  const sum = finiteVals.reduce((acc, v) => acc + v, 0);
   const mean = sum / n;
 
   // PercentileInterval(99.5): [0.25%, 99.75%]
@@ -290,17 +384,7 @@ export function renderFitsBuffer(
   const outW = width * scale;
   const outH = height * scale;
 
-  // Renderizar a un Canvas offscreen / ImageData RGBA nativo
-  const canvas = document.createElement("canvas");
-  canvas.width = outW;
-  canvas.height = outH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("No se pudo inicializar contexto 2D de Canvas.");
-  }
-
-  const imgData = ctx.createImageData(outW, outH);
-  const pixels = imgData.data;
+  const pixels = new Uint8ClampedArray(outW * outH * 4);
 
   for (let y = 0; y < height; y++) {
     // Flip vertical: FITS almacena el origen abajo a la izquierda (Astronomical North-up)
@@ -334,12 +418,10 @@ export function renderFitsBuffer(
     }
   }
 
-  ctx.putImageData(imgData, 0, 0);
-  const dataUrl = canvas.toDataURL("image/png");
-
   return {
-    imageData: imgData,
-    dataUrl,
+    rgba: pixels,
+    outW,
+    outH,
     width,
     height,
     stats: {
@@ -352,6 +434,47 @@ export function renderFitsBuffer(
       shape: [width, height],
       has_zodi: hasZodi,
     },
-    fits_cutout_url: options.fitsCutoutUrl,
+    wcs: extractWcsFromHeader(imageHdu.header),
+    fitsCutoutUrl: options.fitsCutoutUrl,
   };
+}
+
+export function rgbaToRenderedCutout(result: FitsPixelResult): RenderedCutout {
+  const canvas = document.createElement("canvas");
+  canvas.width = result.outW;
+  canvas.height = result.outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("No se pudo inicializar contexto 2D de Canvas.");
+  }
+
+  const imgData = new ImageData(
+    new Uint8ClampedArray(result.rgba),
+    result.outW,
+    result.outH
+  );
+  ctx.putImageData(imgData, 0, 0);
+  const dataUrl = canvas.toDataURL("image/png");
+
+  return {
+    imageData: imgData,
+    dataUrl,
+    width: result.width,
+    height: result.height,
+    stats: result.stats,
+    wcs: result.wcs,
+    fits_cutout_url: result.fitsCutoutUrl,
+  };
+}
+
+export function renderFitsBuffer(
+  rawBuffer: ArrayBuffer,
+  options: {
+    stretch: StretchMode;
+    colormap: ColormapName;
+    subtractZodi: boolean;
+    fitsCutoutUrl: string;
+  }
+): RenderedCutout {
+  return rgbaToRenderedCutout(computeFitsPixels(rawBuffer, options));
 }
