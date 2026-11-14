@@ -233,6 +233,11 @@ export function getOrLoadHipsTile(
   };
   img.onerror = () => {
     entry.status = "error";
+    setTimeout(() => {
+      if (tileCache.get(url) === entry) {
+        tileCache.delete(url);
+      }
+    }, 3000);
   };
   img.src = url;
 

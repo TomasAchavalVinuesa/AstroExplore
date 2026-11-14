@@ -3,6 +3,7 @@ import {
   Columns2,
   Compass,
   Crosshair,
+  Globe,
   Grid,
   Layers,
   Loader2,
@@ -56,6 +57,129 @@ interface HipsSkyMapPanelProps {
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
+const AITOFF_THRESHOLD_FOV = 90;
+const MAX_FOV_DEG = 360;
+
+function wrapRaDeltaDeg(dRa: number): number {
+  return ((dRa + 540) % 360) - 180;
+}
+
+function getAitoffScale(width: number, height: number, fovDeg: number): number {
+  const baseScale = Math.min(
+    (width * 0.92) / (4 * Math.SQRT2),
+    (height * 0.86) / (2 * Math.SQRT2)
+  );
+  return baseScale * (360 / Math.max(AITOFF_THRESHOLD_FOV, Math.min(MAX_FOV_DEG, fovDeg)));
+}
+
+/**
+ * Proyección Hammer-Aitoff (FITS WCS `AIT`) para vista All-Sky / gran campo,
+ * equivalente al modo alejado del visor Firefly de NASA/IPAC IRSA SPHEREx.
+ */
+function projectAitoffRaw(
+  dRaDeg: number,
+  decDeg: number,
+  aitoffScale: number,
+  cx: number,
+  cy: number
+): { x: number; y: number; cosC: number } {
+  const lambda = dRaDeg * DEG2RAD;
+  const phi = Math.max(-90, Math.min(90, decDeg)) * DEG2RAD;
+  const cosPhi = Math.cos(phi);
+  const halfLambda = lambda * 0.5;
+  const denom = Math.sqrt(Math.max(1e-9, 1 + cosPhi * Math.cos(halfLambda)));
+  const xNorm = (-2 * Math.SQRT2 * cosPhi * Math.sin(halfLambda)) / denom;
+  const yNorm = (-Math.SQRT2 * Math.sin(phi)) / denom;
+  return {
+    x: cx + aitoffScale * xNorm,
+    y: cy + aitoffScale * yNorm,
+    cosC: 1,
+  };
+}
+
+/**
+ * Rota (ra, dec) al marco esférico centrado en (ra0, dec0) para proyección Aitoff oblicua.
+ */
+function rotateToAitoffLonLat(
+  raDeg: number,
+  decDeg: number,
+  ra0Deg: number,
+  dec0Deg: number
+): { lonDeg: number; latDeg: number } {
+  const dRa = (raDeg - ra0Deg) * DEG2RAD;
+  const phi = decDeg * DEG2RAD;
+  const phi0 = dec0Deg * DEG2RAD;
+  const sinPhi = Math.sin(phi);
+  const cosPhi = Math.cos(phi);
+  const sinPhi0 = Math.sin(phi0);
+  const cosPhi0 = Math.cos(phi0);
+  const cosDra = Math.cos(dRa);
+
+  const sinLat = Math.max(-1, Math.min(1, cosPhi0 * sinPhi - sinPhi0 * cosPhi * cosDra));
+  const yRot = cosPhi * Math.sin(dRa);
+  const xRot = cosPhi0 * cosPhi * cosDra + sinPhi0 * sinPhi;
+
+  return {
+    lonDeg: Math.atan2(yRot, xRot) * RAD2DEG,
+    latDeg: Math.asin(sinLat) * RAD2DEG,
+  };
+}
+
+function unprojectAitoffToRaDec(
+  x: number,
+  y: number,
+  ra0: number,
+  dec0: number,
+  aitoffScale: number,
+  cx: number,
+  cy: number
+): { ra: number; dec: number } | null {
+  const xNorm = -(x - cx) / aitoffScale;
+  const yNorm = -(y - cy) / aitoffScale;
+  const r2 = (xNorm * xNorm) / 16 + (yNorm * yNorm) / 4;
+  if (r2 > 0.5) return null;
+  const z = Math.sqrt(Math.max(0, 1 - r2));
+  const latRad = Math.asin(Math.max(-1, Math.min(1, z * yNorm)));
+  const lonRad = 2 * Math.atan2(z * xNorm, 2 * (2 * z * z - 1));
+
+  const phi0 = dec0 * DEG2RAD;
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const sinPhi0 = Math.sin(phi0);
+  const cosPhi0 = Math.cos(phi0);
+  const cosLon = Math.cos(lonRad);
+
+  const sinDec = Math.max(-1, Math.min(1, cosPhi0 * sinLat + sinPhi0 * cosLat * cosLon));
+  const ySky = cosLat * Math.sin(lonRad);
+  const xSky = cosPhi0 * cosLat * cosLon - sinPhi0 * sinLat;
+
+  const raDeg = (((ra0 + Math.atan2(ySky, xSky) * RAD2DEG) % 360) + 360) % 360;
+  return { ra: raDeg, dec: Math.asin(sinDec) * RAD2DEG };
+}
+
+function buildAitoffEllipsePath(
+  ctx: CanvasRenderingContext2D,
+  aitoffScale: number,
+  cx: number,
+  cy: number
+): void {
+  ctx.beginPath();
+  let first = true;
+  for (let dec = -90; dec <= 90; dec += 3) {
+    const p = projectAitoffRaw(180, dec, aitoffScale, cx, cy);
+    if (first) {
+      ctx.moveTo(p.x, p.y);
+      first = false;
+    } else {
+      ctx.lineTo(p.x, p.y);
+    }
+  }
+  for (let dec = 90; dec >= -90; dec -= 3) {
+    const p = projectAitoffRaw(-180, dec, aitoffScale, cx, cy);
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.closePath();
+}
 
 /**
  * Proyección estereográfica suave centrada en (ra0, dec0).
@@ -150,7 +274,7 @@ function drawTexturedQuad(
     Math.hypot(p01.x - p11.x, p01.y - p11.y),
     Math.hypot(p00.x - p01.x, p00.y - p01.y)
   );
-  if (maxSpan > 900 || maxSpan < 0.5) return;
+  if (maxSpan > 2400 || maxSpan < 0.5) return;
 
   // Triángulo 1: p00 -> p10 -> p01
   ctx.save();
@@ -331,8 +455,10 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     const cx = width / 2;
     const cy = height / 2;
 
+    const isAitoff = fovDeg >= AITOFF_THRESHOLD_FOV;
     const fovRad = Math.max(1.5, Math.min(160, fovDeg)) * DEG2RAD;
     const scalePxPerRad = Math.min(width, height) / (2 * Math.tan(fovRad / 4) * 2);
+    const aitoffScale = getAitoffScale(width, height, fovDeg);
 
     ctx.fillStyle = "#04060A";
     ctx.fillRect(0, 0, width, height);
@@ -340,25 +466,43 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     const ra0 = viewCenter.ra;
     const dec0 = viewCenter.dec;
 
+    const projectSky = (ra: number, dec: number) => {
+      if (isAitoff) {
+        const { lonDeg, latDeg } = rotateToAitoffLonLat(ra, dec, ra0, dec0);
+        return projectAitoffRaw(lonDeg, latDeg, aitoffScale, cx, cy);
+      }
+      return projectRaDecToCanvas(ra, dec, ra0, dec0, scalePxPerRad, cx, cy);
+    };
+
+    if (isAitoff) {
+      ctx.save();
+      buildAitoffEllipsePath(ctx, aitoffScale, cx, cy);
+      ctx.fillStyle = "#060911";
+      ctx.fill();
+      ctx.clip();
+    }
+
     const halfDiagRad = Math.min(Math.PI * 0.85, fovRad * 0.95 + 0.45 / (1 << activeOrder));
-    const minCosVisibility = Math.cos(halfDiagRad);
+    const minCosVisibility = isAitoff ? -1 : Math.cos(halfDiagRad);
 
     const nside = 1 << activeOrder;
     const npixTotal = 12 * nside * nside;
-    const subDiv = activeOrder === 0 ? 6 : activeOrder === 1 ? 4 : 2;
+    const subDiv = isAitoff ? 8 : activeOrder === 0 ? 6 : activeOrder === 1 ? 4 : 2;
 
     for (let npix = 0; npix < npixTotal; npix++) {
-      const center = getHealpixCellCenter(activeOrder, npix);
-      const cProj = projectRaDecToCanvas(
-        center.ra,
-        center.dec,
-        ra0,
-        dec0,
-        scalePxPerRad,
-        cx,
-        cy
-      );
-      if (cProj.cosC < minCosVisibility) continue;
+      if (!isAitoff) {
+        const center = getHealpixCellCenter(activeOrder, npix);
+        const cProj = projectRaDecToCanvas(
+          center.ra,
+          center.dec,
+          ra0,
+          dec0,
+          scalePxPerRad,
+          cx,
+          cy
+        );
+        if (cProj.cosC < minCosVisibility) continue;
+      }
 
       let img = getOrLoadHipsTile(activeOrder, npix, channelIdx, triggerRepaint);
       let tileOrder = activeOrder;
@@ -402,26 +546,60 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
           const w11 = healpixFaceXYToRaDec(cellFace, fx1, fy1);
           const w01 = healpixFaceXYToRaDec(cellFace, fx0, fy1);
 
-          const p00 = projectRaDecToCanvas(w00.ra, w00.dec, ra0, dec0, scalePxPerRad, cx, cy);
-          const p10 = projectRaDecToCanvas(w10.ra, w10.dec, ra0, dec0, scalePxPerRad, cx, cy);
-          const p11 = projectRaDecToCanvas(w11.ra, w11.dec, ra0, dec0, scalePxPerRad, cx, cy);
-          const p01 = projectRaDecToCanvas(w01.ra, w01.dec, ra0, dec0, scalePxPerRad, cx, cy);
-
-          if (p00.cosC < -0.2 || p10.cosC < -0.2 || p11.cosC < -0.2 || p01.cosC < -0.2) {
-            continue;
-          }
-
           const u0 = fx0 * tileNside - tileIx;
           const v0 = fy0 * tileNside - tileIy;
           const uSpan = fStep * tileNside;
           const vSpan = fStep * tileNside;
 
-          const srcX = u0 * imgW;
-          const srcY = (1 - (v0 + vSpan)) * imgH;
-          const srcW = uSpan * imgW;
-          const srcH = vSpan * imgH;
+          // Convención IVOA HiPS / Aladin HipsGen: X del PNG = fy (v), Y del PNG = fx (u) de arriba hacia abajo
+          const srcX = v0 * imgW;
+          const srcY = u0 * imgH;
+          const srcW = vSpan * imgW;
+          const srcH = uSpan * imgH;
 
-          drawTexturedQuad(ctx, img, srcX, srcY, srcW, srcH, p01, p11, p10, p00);
+          if (isAitoff) {
+            const r00 = rotateToAitoffLonLat(w00.ra, w00.dec, ra0, dec0);
+            const r10 = rotateToAitoffLonLat(w10.ra, w10.dec, ra0, dec0);
+            const r11 = rotateToAitoffLonLat(w11.ra, w11.dec, ra0, dec0);
+            const r01 = rotateToAitoffLonLat(w01.ra, w01.dec, ra0, dec0);
+            const nonPolarLon = [r00, r10, r11, r01]
+              .filter((pt) => Math.abs(pt.latDeg) < 89.9)
+              .map((pt) => pt.lonDeg);
+            const minD = nonPolarLon.length ? Math.min(...nonPolarLon) : 0;
+            const maxD = nonPolarLon.length ? Math.max(...nonPolarLon) : 0;
+
+            if (maxD - minD <= 180) {
+              const p00 = projectAitoffRaw(r00.lonDeg, r00.latDeg, aitoffScale, cx, cy);
+              const p10 = projectAitoffRaw(r10.lonDeg, r10.latDeg, aitoffScale, cx, cy);
+              const p11 = projectAitoffRaw(r11.lonDeg, r11.latDeg, aitoffScale, cx, cy);
+              const p01 = projectAitoffRaw(r01.lonDeg, r01.latDeg, aitoffScale, cx, cy);
+              drawTexturedQuad(ctx, img, srcX, srcY, srcW, srcH, p00, p01, p11, p10);
+            } else {
+              // Cuadrante cruza el antimeridiano (±180°): dibujar en ambos bordes dentro del clip elíptico
+              const pos00 = projectAitoffRaw(r00.lonDeg < 0 ? r00.lonDeg + 360 : r00.lonDeg, r00.latDeg, aitoffScale, cx, cy);
+              const pos10 = projectAitoffRaw(r10.lonDeg < 0 ? r10.lonDeg + 360 : r10.lonDeg, r10.latDeg, aitoffScale, cx, cy);
+              const pos11 = projectAitoffRaw(r11.lonDeg < 0 ? r11.lonDeg + 360 : r11.lonDeg, r11.latDeg, aitoffScale, cx, cy);
+              const pos01 = projectAitoffRaw(r01.lonDeg < 0 ? r01.lonDeg + 360 : r01.lonDeg, r01.latDeg, aitoffScale, cx, cy);
+              drawTexturedQuad(ctx, img, srcX, srcY, srcW, srcH, pos00, pos01, pos11, pos10);
+
+              const neg00 = projectAitoffRaw(r00.lonDeg > 0 ? r00.lonDeg - 360 : r00.lonDeg, r00.latDeg, aitoffScale, cx, cy);
+              const neg10 = projectAitoffRaw(r10.lonDeg > 0 ? r10.lonDeg - 360 : r10.lonDeg, r10.latDeg, aitoffScale, cx, cy);
+              const neg11 = projectAitoffRaw(r11.lonDeg > 0 ? r11.lonDeg - 360 : r11.lonDeg, r11.latDeg, aitoffScale, cx, cy);
+              const neg01 = projectAitoffRaw(r01.lonDeg > 0 ? r01.lonDeg - 360 : r01.lonDeg, r01.latDeg, aitoffScale, cx, cy);
+              drawTexturedQuad(ctx, img, srcX, srcY, srcW, srcH, neg00, neg01, neg11, neg10);
+            }
+          } else {
+            const p00 = projectRaDecToCanvas(w00.ra, w00.dec, ra0, dec0, scalePxPerRad, cx, cy);
+            const p10 = projectRaDecToCanvas(w10.ra, w10.dec, ra0, dec0, scalePxPerRad, cx, cy);
+            const p11 = projectRaDecToCanvas(w11.ra, w11.dec, ra0, dec0, scalePxPerRad, cx, cy);
+            const p01 = projectRaDecToCanvas(w01.ra, w01.dec, ra0, dec0, scalePxPerRad, cx, cy);
+
+            if (p00.cosC < -0.2 || p10.cosC < -0.2 || p11.cosC < -0.2 || p01.cosC < -0.2) {
+              continue;
+            }
+
+            drawTexturedQuad(ctx, img, srcX, srcY, srcW, srcH, p00, p01, p11, p10);
+          }
         }
       }
     }
@@ -435,112 +613,190 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       ctx.lineWidth = 0.75;
 
       for (const cell of cells) {
-        const center = getHealpixCellCenter(cell.order, cell.npix);
-        const cProj = projectRaDecToCanvas(
-          center.ra,
-          center.dec,
-          ra0,
-          dec0,
-          scalePxPerRad,
-          cx,
-          cy
-        );
-        if (cProj.cosC < minCosVisibility) continue;
+        if (!isAitoff) {
+          const center = getHealpixCellCenter(cell.order, cell.npix);
+          const cProj = projectRaDecToCanvas(
+            center.ra,
+            center.dec,
+            ra0,
+            dec0,
+            scalePxPerRad,
+            cx,
+            cy
+          );
+          if (cProj.cosC < minCosVisibility) continue;
+        }
 
         const corners = getHealpixCellCorners(cell.order, cell.npix);
-        const pts = corners.map((c) =>
-          projectRaDecToCanvas(c.ra, c.dec, ra0, dec0, scalePxPerRad, cx, cy)
-        );
-        if (pts.some((p) => p.cosC <= 0)) continue;
 
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        ctx.lineTo(pts[1].x, pts[1].y);
-        ctx.lineTo(pts[2].x, pts[2].y);
-        ctx.lineTo(pts[3].x, pts[3].y);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
+        if (isAitoff) {
+          const rotCorners = corners.map((c) => rotateToAitoffLonLat(c.ra, c.dec, ra0, dec0));
+          const lons = rotCorners.map((r) => r.lonDeg);
+          const minD = Math.min(...lons);
+          const maxD = Math.max(...lons);
+          const passes =
+            maxD - minD <= 180
+              ? [lons]
+              : [
+                  lons.map((d) => (d < 0 ? d + 360 : d)),
+                  lons.map((d) => (d > 0 ? d - 360 : d)),
+                ];
+          for (const passLons of passes) {
+            const pts = rotCorners.map((r, idx) =>
+              projectAitoffRaw(passLons[idx], r.latDeg, aitoffScale, cx, cy)
+            );
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            ctx.lineTo(pts[1].x, pts[1].y);
+            ctx.lineTo(pts[2].x, pts[2].y);
+            ctx.lineTo(pts[3].x, pts[3].y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+        } else {
+          const pts = corners.map((c) =>
+            projectRaDecToCanvas(c.ra, c.dec, ra0, dec0, scalePxPerRad, cx, cy)
+          );
+          if (pts.some((p) => p.cosC <= 0)) continue;
+
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          ctx.lineTo(pts[1].x, pts[1].y);
+          ctx.lineTo(pts[2].x, pts[2].y);
+          ctx.lineTo(pts[3].x, pts[3].y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
       }
       ctx.restore();
     };
 
     if (showMocWide) {
-      drawMocCells(mocWideCells, "rgba(14, 165, 233, 0.10)", "rgba(56, 189, 248, 0.28)");
+      drawMocCells(mocWideCells, "rgba(14, 165, 233, 0.12)", "rgba(56, 189, 248, 0.30)");
     }
     if (showMocDeep) {
-      drawMocCells(mocDeepCells, "rgba(168, 85, 247, 0.22)", "rgba(216, 180, 254, 0.65)");
+      drawMocCells(mocDeepCells, "rgba(168, 85, 247, 0.24)", "rgba(216, 180, 254, 0.68)");
     }
 
     // 3. Malla Celeste Ecuatorial (RA / Dec Graticule)
     if (showGrid) {
       ctx.save();
-      ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
-      ctx.fillStyle = "rgba(148, 163, 184, 0.65)";
+      ctx.strokeStyle = isAitoff ? "rgba(148, 163, 184, 0.24)" : "rgba(148, 163, 184, 0.18)";
+      ctx.fillStyle = "rgba(148, 163, 184, 0.72)";
       ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.lineWidth = 1;
 
-      const stepRa = fovDeg > 60 ? 30 : fovDeg > 20 ? 10 : fovDeg > 6 ? 2 : 1;
-      const stepDec = fovDeg > 60 ? 20 : fovDeg > 20 ? 10 : fovDeg > 6 ? 2 : 1;
-
-      for (let dec = -80; dec <= 80; dec += stepDec) {
-        ctx.beginPath();
-        let started = false;
-        for (let ra = 0; ra <= 360; ra += 2) {
-          const p = projectRaDecToCanvas(ra, dec, ra0, dec0, scalePxPerRad, cx, cy);
-          if (
-            p.cosC > 0.1 &&
-            p.x >= -50 &&
-            p.x <= width + 50 &&
-            p.y >= -50 &&
-            p.y <= height + 50
-          ) {
-            if (!started) {
+      if (isAitoff) {
+        const seamJumpPx = aitoffScale * 2.2;
+        // Paralelos de Declinación en Aitoff rotado
+        for (let dec = -60; dec <= 60; dec += 30) {
+          ctx.beginPath();
+          let prevX: number | null = null;
+          for (let ra = 0; ra <= 360; ra += 4) {
+            const p = projectSky(ra, dec);
+            if (prevX === null || Math.abs(p.x - prevX) > seamJumpPx) {
               ctx.moveTo(p.x, p.y);
-              started = true;
             } else {
               ctx.lineTo(p.x, p.y);
             }
-          } else {
-            started = false;
+            prevX = p.x;
+          }
+          ctx.stroke();
+
+          if (dec !== 0) {
+            const decLabelPt = projectSky(ra0, dec);
+            if (decLabelPt.x > 16 && decLabelPt.x < width - 36 && decLabelPt.y > 24 && decLabelPt.y < height - 24) {
+              ctx.fillText(`${dec > 0 ? "+" : ""}${dec}°`, decLabelPt.x + 4, decLabelPt.y - 3);
+            }
           }
         }
-        ctx.stroke();
-      }
 
-      for (let ra = 0; ra < 360; ra += stepRa) {
-        ctx.beginPath();
-        let started = false;
-        for (let dec = -85; dec <= 85; dec += 2) {
-          const p = projectRaDecToCanvas(ra, dec, ra0, dec0, scalePxPerRad, cx, cy);
-          if (
-            p.cosC > 0.1 &&
-            p.x >= -50 &&
-            p.x <= width + 50 &&
-            p.y >= -50 &&
-            p.y <= height + 50
-          ) {
-            if (!started) {
+        // Meridianos de Ascensión Recta cada 30° (2h)
+        for (let ra = 0; ra < 360; ra += 30) {
+          ctx.beginPath();
+          let prevX: number | null = null;
+          for (let dec = -90; dec <= 90; dec += 3) {
+            const p = projectSky(ra, dec);
+            if (prevX === null || Math.abs(p.x - prevX) > seamJumpPx) {
               ctx.moveTo(p.x, p.y);
-              started = true;
             } else {
               ctx.lineTo(p.x, p.y);
             }
-          } else {
-            started = false;
+            prevX = p.x;
+          }
+          ctx.stroke();
+
+          const { lonDeg } = rotateToAitoffLonLat(ra, 0, ra0, dec0);
+          if (Math.abs(lonDeg) < 168) {
+            const eqPt = projectSky(ra, 0);
+            ctx.fillText(`${ra}°`, eqPt.x + 3, eqPt.y - 3);
           }
         }
-        ctx.stroke();
+      } else {
+        const stepRa = fovDeg > 60 ? 30 : fovDeg > 20 ? 10 : fovDeg > 6 ? 2 : 1;
+        const stepDec = fovDeg > 60 ? 20 : fovDeg > 20 ? 10 : fovDeg > 6 ? 2 : 1;
 
-        const labelPt = projectRaDecToCanvas(ra, dec0, ra0, dec0, scalePxPerRad, cx, cy);
-        if (
-          labelPt.cosC > 0.2 &&
-          labelPt.x > 24 &&
-          labelPt.x < width - 40 &&
-          labelPt.y > 54 &&
-          labelPt.y < height - 54
-        ) {
-          ctx.fillText(`${ra}°`, labelPt.x + 3, labelPt.y - 3);
+        for (let dec = -80; dec <= 80; dec += stepDec) {
+          ctx.beginPath();
+          let started = false;
+          for (let ra = 0; ra <= 360; ra += 2) {
+            const p = projectRaDecToCanvas(ra, dec, ra0, dec0, scalePxPerRad, cx, cy);
+            if (
+              p.cosC > 0.1 &&
+              p.x >= -50 &&
+              p.x <= width + 50 &&
+              p.y >= -50 &&
+              p.y <= height + 50
+            ) {
+              if (!started) {
+                ctx.moveTo(p.x, p.y);
+                started = true;
+              } else {
+                ctx.lineTo(p.x, p.y);
+              }
+            } else {
+              started = false;
+            }
+          }
+          ctx.stroke();
+        }
+
+        for (let ra = 0; ra < 360; ra += stepRa) {
+          ctx.beginPath();
+          let started = false;
+          for (let dec = -85; dec <= 85; dec += 2) {
+            const p = projectRaDecToCanvas(ra, dec, ra0, dec0, scalePxPerRad, cx, cy);
+            if (
+              p.cosC > 0.1 &&
+              p.x >= -50 &&
+              p.x <= width + 50 &&
+              p.y >= -50 &&
+              p.y <= height + 50
+            ) {
+              if (!started) {
+                ctx.moveTo(p.x, p.y);
+                started = true;
+              } else {
+                ctx.lineTo(p.x, p.y);
+              }
+            } else {
+              started = false;
+            }
+          }
+          ctx.stroke();
+
+          const labelPt = projectRaDecToCanvas(ra, dec0, ra0, dec0, scalePxPerRad, cx, cy);
+          if (
+            labelPt.cosC > 0.2 &&
+            labelPt.x > 24 &&
+            labelPt.x < width - 40 &&
+            labelPt.y > 54 &&
+            labelPt.y < height - 54
+          ) {
+            ctx.fillText(`${ra}°`, labelPt.x + 3, labelPt.y - 3);
+          }
         }
       }
       ctx.restore();
@@ -559,10 +815,12 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         const isSelected =
           selectedObs?.obs_id === obs.obs_id && selectedObs?.bandpass === obs.bandpass;
 
-        const pts = poly.map((v) =>
-          projectRaDecToCanvas(v.ra, v.dec, ra0, dec0, scalePxPerRad, cx, cy)
-        );
-        if (pts.some((p) => p.cosC <= 0.05)) continue;
+        const pts = poly.map((v) => projectSky(v.ra, v.dec));
+        if (!isAitoff && pts.some((p) => p.cosC <= 0.05)) continue;
+        if (isAitoff) {
+          const lons = poly.map((v) => rotateToAitoffLonLat(v.ra, v.dec, ra0, dec0).lonDeg);
+          if (Math.max(...lons) - Math.min(...lons) > 180) continue;
+        }
 
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -599,9 +857,9 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         { ra: boxCenter.ra + halfRa, dec: boxCenter.dec - halfDec },
         { ra: boxCenter.ra + halfRa, dec: boxCenter.dec + halfDec },
         { ra: boxCenter.ra - halfRa, dec: boxCenter.dec + halfDec },
-      ].map((c) => projectRaDecToCanvas(c.ra, c.dec, ra0, dec0, scalePxPerRad, cx, cy));
+      ].map((c) => projectSky(c.ra, c.dec));
 
-      if (!boxCorners.some((p) => p.cosC <= 0.05)) {
+      if (isAitoff || !boxCorners.some((p) => p.cosC <= 0.05)) {
         ctx.save();
         ctx.strokeStyle = "#00D2FF";
         ctx.fillStyle = "rgba(0, 210, 255, 0.16)";
@@ -621,16 +879,8 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
     // 5. Marcador de la coordenada objetivo actual (estilo CHRONO-SPHEREx)
     if (targetCoords) {
-      const tProj = projectRaDecToCanvas(
-        targetCoords.ra,
-        targetCoords.dec,
-        ra0,
-        dec0,
-        scalePxPerRad,
-        cx,
-        cy
-      );
-      if (tProj.cosC > 0.05) {
+      const tProj = projectSky(targetCoords.ra, targetCoords.dec);
+      if (isAitoff || tProj.cosC > 0.05) {
         ctx.save();
         const glow = ctx.createRadialGradient(tProj.x, tProj.y, 2, tProj.x, tProj.y, 26);
         glow.addColorStop(0, "rgba(0, 210, 255, 0.85)");
@@ -663,16 +913,8 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
     // 6. Marcador destacado del punto seleccionado con doble clic (`markedPoint`)
     if (markedPoint) {
-      const mProj = projectRaDecToCanvas(
-        markedPoint.ra,
-        markedPoint.dec,
-        ra0,
-        dec0,
-        scalePxPerRad,
-        cx,
-        cy
-      );
-      if (mProj.cosC > 0.05) {
+      const mProj = projectSky(markedPoint.ra, markedPoint.dec);
+      if (isAitoff || mProj.cosC > 0.05) {
         ctx.save();
         ctx.strokeStyle = "#FFB703";
         ctx.lineWidth = 2.2;
@@ -686,6 +928,17 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         ctx.fill();
         ctx.restore();
       }
+    }
+
+    // 7. Cerrar clip elíptico y dibujar borde de la proyección Aitoff All-Sky
+    if (isAitoff) {
+      ctx.restore();
+      ctx.save();
+      buildAitoffEllipsePath(ctx, aitoffScale, cx, cy);
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
     }
   }, [
     canvasSize,
@@ -729,25 +982,48 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     const canvasX = (e.clientX - rect.left) * scaleX;
     const canvasY = (e.clientY - rect.top) * scaleY;
 
+    const isAitoff = fovDeg >= AITOFF_THRESHOLD_FOV;
     const fovRad = Math.max(1.5, Math.min(160, fovDeg)) * DEG2RAD;
     const scalePxPerRad = Math.min(canvas.width, canvas.height) / (2 * Math.tan(fovRad / 4) * 2);
-    const hovered = unprojectCanvasToRaDec(
-      canvasX,
-      canvasY,
-      viewCenter.ra,
-      viewCenter.dec,
-      scalePxPerRad,
-      canvas.width / 2,
-      canvas.height / 2
-    );
+    const aitoffScale = getAitoffScale(canvas.width, canvas.height, fovDeg);
+
+    const hovered = isAitoff
+      ? unprojectAitoffToRaDec(
+          canvasX,
+          canvasY,
+          viewCenter.ra,
+          viewCenter.dec,
+          aitoffScale,
+          canvas.width / 2,
+          canvas.height / 2
+        )
+      : unprojectCanvasToRaDec(
+          canvasX,
+          canvasY,
+          viewCenter.ra,
+          viewCenter.dec,
+          scalePxPerRad,
+          canvas.width / 2,
+          canvas.height / 2
+        );
     setCursorCoords(hovered);
 
     if (!dragRef.current.dragging) return;
 
     const dxPx = e.clientX - dragRef.current.startX;
     const dyPx = e.clientY - dragRef.current.startY;
-    const degPerPx = fovDeg / Math.min(rect.width, rect.height);
 
+    if (isAitoff) {
+      const aitoffWidthPx = Math.max(1, (aitoffScale * 4 * Math.SQRT2) / scaleX);
+      const degPerPx = 360 / aitoffWidthPx;
+      const cosDec = Math.max(0.2, Math.cos(dragRef.current.startDec * DEG2RAD));
+      const newRa = (((dragRef.current.startRa + (dxPx * degPerPx) / cosDec) % 360) + 360) % 360;
+      const newDec = Math.max(-88, Math.min(88, dragRef.current.startDec + dyPx * degPerPx));
+      setViewCenter({ ra: newRa, dec: newDec });
+      return;
+    }
+
+    const degPerPx = fovDeg / Math.min(rect.width, rect.height);
     const cosDec = Math.max(0.15, Math.cos(dragRef.current.startDec * DEG2RAD));
     const newRa = (((dragRef.current.startRa + (dxPx * degPerPx) / cosDec) % 360) + 360) % 360;
     const newDec = Math.max(-88, Math.min(88, dragRef.current.startDec + dyPx * degPerPx));
@@ -772,7 +1048,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       e.stopPropagation();
       if (e.deltaY === 0) return;
       const factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-      setFovDeg((prev) => Number(Math.max(2, Math.min(150, prev * factor)).toFixed(2)));
+      setFovDeg((prev) => Number(Math.max(2, Math.min(MAX_FOV_DEG, prev * factor)).toFixed(2)));
     };
 
     el.addEventListener("wheel", onNativeWheel, { passive: false });
@@ -789,18 +1065,30 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       const rect = canvas.getBoundingClientRect();
       const canvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
       const canvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const isAitoff = fovDeg >= AITOFF_THRESHOLD_FOV;
       const fovRad = Math.max(1.5, Math.min(160, fovDeg)) * DEG2RAD;
       const scalePxPerRad = Math.min(canvas.width, canvas.height) / (2 * Math.tan(fovRad / 4) * 2);
+      const aitoffScale = getAitoffScale(canvas.width, canvas.height, fovDeg);
       picked =
-        unprojectCanvasToRaDec(
-          canvasX,
-          canvasY,
-          viewCenter.ra,
-          viewCenter.dec,
-          scalePxPerRad,
-          canvas.width / 2,
-          canvas.height / 2
-        ) ?? cursorCoords;
+        (isAitoff
+          ? unprojectAitoffToRaDec(
+              canvasX,
+              canvasY,
+              viewCenter.ra,
+              viewCenter.dec,
+              aitoffScale,
+              canvas.width / 2,
+              canvas.height / 2
+            )
+          : unprojectCanvasToRaDec(
+              canvasX,
+              canvasY,
+              viewCenter.ra,
+              viewCenter.dec,
+              scalePxPerRad,
+              canvas.width / 2,
+              canvas.height / 2
+            )) ?? cursorCoords;
     }
 
     if (!picked) return;
@@ -846,7 +1134,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
           {loadingMoc && <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF]" />}
           <span className="truncate max-w-[160px]">{targetName}</span>
           <span className="text-[10px] font-mono text-[#00D2FF]">
-            FOV {fovDeg.toFixed(0)}°
+            {fovDeg >= AITOFF_THRESHOLD_FOV ? "AIT · " : ""}FOV {fovDeg.toFixed(0)}°
           </span>
         </div>
 
@@ -984,11 +1272,26 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setFovDeg((f) => Math.min(150, Number((f / 0.7).toFixed(2))))}
+              onClick={() => setFovDeg((f) => Math.min(MAX_FOV_DEG, Number((f / 0.7).toFixed(2))))}
               className="p-1 hover:text-white cursor-pointer"
               title={t.viewer.zoomOutTitle}
             >
               <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewCenter((v) => ({ ra: v.ra, dec: 0 }));
+                setFovDeg(MAX_FOV_DEG);
+              }}
+              className={`p-1 border-l border-white/10 pl-1.5 cursor-pointer ${
+                fovDeg >= AITOFF_THRESHOLD_FOV
+                  ? "text-[#00D2FF]"
+                  : "hover:text-[#00D2FF]"
+              }`}
+              title={t.skyMap.allSkyButton}
+            >
+              <Globe className="w-3.5 h-3.5" />
             </button>
             {targetCoords && (
               <button
