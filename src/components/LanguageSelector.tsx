@@ -1,5 +1,4 @@
 import React from "react";
-import { Globe } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
 
 export const LanguageSelector: React.FC = () => {
@@ -7,37 +6,47 @@ export const LanguageSelector: React.FC = () => {
 
   return (
     <div
-      className="inline-flex items-center gap-1 p-1 bg-slate-900/90 border border-slate-700/80 rounded-xl shadow-inner text-xs"
+      className="glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-2 text-xs font-medium tracking-wide"
       role="group"
       aria-label={t.navbar.languageAriaLabel}
     >
-      <div className="pl-1.5 pr-1 flex items-center text-cyan-400" title={t.navbar.selectLanguage}>
-        <Globe className="w-3.5 h-3.5" />
-      </div>
+      <svg
+        className="w-3.5 h-3.5 text-slate-400 shrink-0"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </svg>
 
       <button
         type="button"
         onClick={() => setLanguage("es")}
         aria-pressed={language === "es"}
         title={t.navbar.spanish}
-        className={`px-2.5 py-1 rounded-lg font-semibold text-xs transition-all duration-150 cursor-pointer ${
+        className={`btn-press cursor-pointer transition-colors ${
           language === "es"
-            ? "bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/30"
-            : "text-slate-300 hover:text-white hover:bg-slate-800/80"
+            ? "text-[#00D2FF] font-semibold"
+            : "text-slate-400 hover:text-white"
         }`}
       >
         ES
       </button>
+
+      <span className="text-slate-600">|</span>
 
       <button
         type="button"
         onClick={() => setLanguage("en")}
         aria-pressed={language === "en"}
         title={t.navbar.english}
-        className={`px-2.5 py-1 rounded-lg font-semibold text-xs transition-all duration-150 cursor-pointer ${
+        className={`btn-press cursor-pointer transition-colors ${
           language === "en"
-            ? "bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/30"
-            : "text-slate-300 hover:text-white hover:bg-slate-800/80"
+            ? "text-[#00D2FF] font-semibold"
+            : "text-slate-400 hover:text-white"
         }`}
       >
         EN
@@ -45,4 +54,3 @@ export const LanguageSelector: React.FC = () => {
     </div>
   );
 };
-

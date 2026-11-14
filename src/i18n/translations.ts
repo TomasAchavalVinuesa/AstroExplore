@@ -206,6 +206,47 @@ export interface Translations {
     fitsAllNan: string;
     fitsCanvasError: string;
   };
+  chrono: {
+    entryTitle: string;
+    heroTitle: string;
+    heroSubtitle: string;
+    heroCta: string;
+    loadingLabel: string;
+    backButton: string;
+    searchByCoords: string;
+    coordsInputPlaceholder: string;
+    goButton: string;
+    searchByName: string;
+    nameInputPlaceholder: string;
+    searchButton: string;
+    zoomFov: string;
+    molecularSignatures: string;
+    standbyBadge: string;
+    activeBadge: string;
+    onLabel: string;
+    advancedControls: string;
+    exposuresDrawerButton: (count: number) => string;
+    apiStatusConnected: (count: number) => string;
+    apiStatusQuerying: string;
+    apiStatusReady: string;
+    epochLabel: string;
+    speedLabel: string;
+    playPauseAria: string;
+    splitSecondMapButton: string;
+    closeSecondMapButton: string;
+    map1Title: string;
+    map2Title: string;
+    customSkyPatch: string;
+    molecules: {
+      h2o: string;
+      co2: string;
+      co: string;
+      ch3oh: string;
+      ch4: string;
+      nh3: string;
+      pahs: string;
+    };
+  };
   presets: TargetPreset[];
 }
 
@@ -439,6 +480,47 @@ export const translations: Record<Language, Translations> = {
       fitsInvalidDimensions: "Dimensiones de imagen FITS inválidas.",
       fitsAllNan: "Todos los píxeles del recorte son NaN o vacíos.",
       fitsCanvasError: "No se pudo inicializar contexto 2D de Canvas.",
+    },
+    chrono: {
+      entryTitle: "Explore the space",
+      heroTitle: "Navegación libre",
+      heroSubtitle: "Descubrí las locuras del espacio",
+      heroCta: "Comenzar →",
+      loadingLabel: "Analizando el espacio...",
+      backButton: "Volver",
+      searchByCoords: "Buscador por coordenadas",
+      coordsInputPlaceholder: "RA, Dec (ej. 133.79, -7.24)",
+      goButton: "Ir",
+      searchByName: "Buscador por nombre",
+      nameInputPlaceholder: "ej. WISE 0855, Barnard...",
+      searchButton: "Buscar",
+      zoomFov: "Zoom (Campo visual)",
+      molecularSignatures: "Firmas moleculares",
+      standbyBadge: "Listo",
+      activeBadge: "Activo",
+      onLabel: "ON",
+      advancedControls: "Ajustes científicos y bandas",
+      exposuresDrawerButton: (count) => `Exposiciones FITS (${count})`,
+      apiStatusConnected: (count) => `IRSA Conectado (${count} exp.)`,
+      apiStatusQuerying: "Consultando IRSA SIA...",
+      apiStatusReady: "Visor Celeste en Vivo",
+      epochLabel: "Época",
+      speedLabel: "Velocidad",
+      playPauseAria: "Reproducir o Pausar",
+      splitSecondMapButton: "Abrir 2º Mapa (Dividir Vista)",
+      closeSecondMapButton: "Cerrar 2º Mapa",
+      map1Title: "Mapa 1 · Cielo HiPS / MOC",
+      map2Title: "Mapa 2 · Recorte FITS y Épocas",
+      customSkyPatch: "Sector Celeste Personalizado",
+      molecules: {
+        h2o: "Hielo de agua (H₂O)",
+        co2: "Dióxido de carbono (CO₂)",
+        co: "Monóxido de carbono (CO)",
+        ch3oh: "Metanol",
+        ch4: "Metano (CH₄)",
+        nh3: "Amoníaco / Cianato",
+        pahs: "PAHs",
+      },
     },
     presets: [
       {
@@ -767,6 +849,47 @@ export const translations: Record<Language, Translations> = {
       fitsInvalidDimensions: "Invalid FITS image dimensions.",
       fitsAllNan: "All pixels in cutout are NaN or empty.",
       fitsCanvasError: "Could not initialize Canvas 2D context.",
+    },
+    chrono: {
+      entryTitle: "Explore the space",
+      heroTitle: "Free Navigation",
+      heroSubtitle: "Discover the wonders of space",
+      heroCta: "Start →",
+      loadingLabel: "Analyzing space...",
+      backButton: "Back",
+      searchByCoords: "Search by Coordinates",
+      coordsInputPlaceholder: "RA, Dec (e.g. 133.79, -7.24)",
+      goButton: "Go",
+      searchByName: "Search by Name",
+      nameInputPlaceholder: "e.g. WISE 0855, Barnard...",
+      searchButton: "Search",
+      zoomFov: "Zoom (Field of View)",
+      molecularSignatures: "Molecular Signatures",
+      standbyBadge: "UI Ready",
+      activeBadge: "Active",
+      onLabel: "ON",
+      advancedControls: "Scientific & Band Settings",
+      exposuresDrawerButton: (count) => `FITS Exposures (${count})`,
+      apiStatusConnected: (count) => `IRSA Connected (${count} exp.)`,
+      apiStatusQuerying: "Querying IRSA SIA...",
+      apiStatusReady: "Live Sky Renderer",
+      epochLabel: "Epoch",
+      speedLabel: "Speed",
+      playPauseAria: "Play or Pause",
+      splitSecondMapButton: "Open 2nd Map (Split View)",
+      closeSecondMapButton: "Close 2nd Map",
+      map1Title: "Map 1 · HiPS / MOC Sky",
+      map2Title: "Map 2 · FITS Cutout & Epochs",
+      customSkyPatch: "Custom Sky Patch",
+      molecules: {
+        h2o: "Water Ice (H₂O)",
+        co2: "Carbon Dioxide (CO₂)",
+        co: "Carbon Monoxide (CO)",
+        ch3oh: "Methanol",
+        ch4: "Methane (CH₄)",
+        nh3: "Ammonia / Cyanate",
+        pahs: "PAHs",
+      },
     },
     presets: [
       {

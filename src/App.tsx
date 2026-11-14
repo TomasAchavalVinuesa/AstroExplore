@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navbar } from "./components/Navbar";
-import { ControlsPanel } from "./components/ControlsPanel";
-import { ViewerPanel } from "./components/ViewerPanel";
+import { X } from "lucide-react";
+import {
+  ControlsPanel,
+  type MoleculeSignature,
+} from "./components/ControlsPanel";
+import { LanguageSelector } from "./components/LanguageSelector";
 import { ObservationsPanel } from "./components/ObservationsPanel";
+import { ViewerPanel } from "./components/ViewerPanel";
 import { parseDec, parseRA } from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
+import { SPHEREX_HIPS_WAVELENGTHS_UM } from "./lib/hips";
 import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
 import { useLanguage } from "./i18n/LanguageContext";
 import type { Translations } from "./i18n/translations";
@@ -19,6 +24,8 @@ import type {
   StretchMode,
   TargetPreset,
 } from "./lib/types";
+
+type ScreenId = "entry" | "loading" | "explorer";
 
 type StatusState =
   | { type: "resolvingObject"; name: string }
@@ -45,12 +52,28 @@ function translateErrorMessage(msg: string, t: Translations): string {
 export default function App() {
   const { t } = useLanguage();
 
+  // Screen navigation state (Entry -> Loading -> Explorer)
+  const [currentScreen, setCurrentScreen] = useState<ScreenId>("entry");
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+
+  // Dual-map split state: false = 1 map (100% width), true = 2 maps dividing the original map space in 2
+  const [secondMapOpen, setSecondMapOpen] = useState<boolean>(false);
+  const [showExposuresModal, setShowExposuresModal] = useState<boolean>(false);
+
+  // Active molecular signatures & tuned HiPS spectral channel
+  const [activeMolecules, setActiveMolecules] = useState<Set<string>>(new Set());
+  const [externalChannelIdx, setExternalChannelIdx] = useState<number | null>(null);
+
+  const galaxyCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cardStarsRef = useRef<HTMLCanvasElement | null>(null);
+
   const [raInput, setRaInput] = useState("08h55m10.831s");
   const [decInput, setDecInput] = useState("-7d14m42.53s");
+  const [targetName, setTargetName] = useState("WISE 0855");
   const [collectionMode, setCollectionMode] = useState<CollectionQueryMode>("spherex_dr1");
   const [band, setBand] = useState("all");
   const [radius, setRadius] = useState("0.05");
-  const [size, setSize] = useState("0.15");
+  const [size, setSize] = useState("0.12");
 
   const [stretch, setStretch] = useState<StretchMode>("asinh");
   const [colormap, setColormap] = useState<ColormapName>("inferno");
@@ -73,9 +96,101 @@ export default function App() {
   const [activeCollection, setActiveCollection] = useState<SpherexCollectionId>("spherex_dr1");
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const [cutout, setCutout] = useState<RenderedCutout | null>(null);
-  const [lastCoords, setLastCoords] = useState<{ ra: number; dec: number; size: number } | null>(
-    null
-  );
+  const [lastCoords, setLastCoords] = useState<{ ra: number; dec: number; size: number } | null>({
+    ra: 133.79513,
+    dec: -7.24515,
+    size: 0.12,
+  });
+
+  // Draw background galaxy & hero card starfield (from chrono_spherex_app.html)
+  useEffect(() => {
+    const drawGalaxyBackground = () => {
+      const canvas = galaxyCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.fillStyle = "#080B10";
+      ctx.fillRect(0, 0, w, h);
+
+      // Soft diagonal galactic band
+      const grad = ctx.createLinearGradient(0, 0, w, h);
+      grad.addColorStop(0, "rgba(26, 48, 86, 0.28)");
+      grad.addColorStop(0.5, "rgba(18, 30, 52, 0.14)");
+      grad.addColorStop(1, "rgba(88, 56, 36, 0.22)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // Soft nebula glows
+      const glows: Array<[number, number, number, string]> = [
+        [w * 0.2, h * 0.25, w * 0.38, "rgba(42, 78, 130, 0.16)"],
+        [w * 0.78, h * 0.75, w * 0.4, "rgba(120, 74, 44, 0.14)"],
+        [w * 0.5, h * 0.5, w * 0.35, "rgba(0, 140, 180, 0.08)"],
+      ];
+      glows.forEach(([gx, gy, r, color]) => {
+        const rg = ctx.createRadialGradient(gx, gy, 0, gx, gy, r);
+        rg.addColorStop(0, color);
+        rg.addColorStop(1, "transparent");
+        ctx.fillStyle = rg;
+        ctx.fillRect(0, 0, w, h);
+      });
+
+      // Subtle stars
+      for (let i = 0; i < 240; i++) {
+        const x = (i * 7919) % w;
+        const y = (i * 6271) % h;
+        const r = i % 7 === 0 ? 1.4 : 0.8;
+        ctx.fillStyle = `rgba(226, 232, 240, ${0.18 + (i % 5) * 0.09})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    const drawCardStars = () => {
+      const c = cardStarsRef.current;
+      if (!c) return;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      c.width = c.offsetWidth || 460;
+      c.height = c.offsetHeight || 340;
+      const w = c.width;
+      const h = c.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const rg = ctx.createRadialGradient(w * 0.35, h * 0.35, 10, w * 0.5, h * 0.5, w * 0.7);
+      rg.addColorStop(0, "rgba(0, 210, 255, 0.12)");
+      rg.addColorStop(0.5, "rgba(110, 72, 48, 0.10)");
+      rg.addColorStop(1, "transparent");
+      ctx.fillStyle = rg;
+      ctx.fillRect(0, 0, w, h);
+
+      for (let i = 0; i < 160; i++) {
+        const x = (i * 104729) % w;
+        const y = (i * 32452843) % h;
+        const r = i % 9 === 0 ? 1.5 : 0.7;
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.25 + (i % 6) * 0.11})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    drawGalaxyBackground();
+    drawCardStars();
+
+    const onResize = () => {
+      drawGalaxyBackground();
+      drawCardStars();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const status = useMemo(() => {
     if (!statusState) return null;
@@ -236,7 +351,7 @@ export default function App() {
     []
   );
 
-  // Cambio instantáneo de escalas de flujo, paleta o zodi sobre el FITS en memoria
+  // Instant update of flux stretch, colormap, or zodi subtraction on loaded FITS
   useEffect(() => {
     const obs = observations[selectedIdx];
     if (!obs || !lastCoords) return;
@@ -251,7 +366,7 @@ export default function App() {
     );
   }, [stretch, colormap, subtractZodi, selectedIdx, observations, lastCoords, loadCutout]);
 
-  // Precargar en segundo plano la observación siguiente cuando el visor principal termina
+  // Background prefetch next observation
   useEffect(() => {
     if (cutoutLoading || !cutout || !lastCoords) return;
     const nextObs = observations[selectedIdx + 1];
@@ -268,18 +383,64 @@ export default function App() {
     return () => controller.abort();
   }, [cutoutLoading, cutout, lastCoords, observations, selectedIdx]);
 
+  // Launch from Screen 1 (Entry) -> Screen 2 (Loading) -> Screen 3 (Explorer)
+  const launchExplorer = useCallback(async () => {
+    setCurrentScreen("loading");
+    setLoadingProgress(25);
+
+    const searchPromise = versions
+      ? Promise.resolve()
+      : executeSearch(raInput, decInput, collectionMode, band, radius, size);
+
+    const stepTimer = window.setTimeout(() => {
+      setLoadingProgress(85);
+    }, 260);
+
+    await Promise.race([
+      searchPromise,
+      new Promise((resolve) => window.setTimeout(resolve, 1400)),
+    ]);
+
+    window.clearTimeout(stepTimer);
+    setLoadingProgress(100);
+
+    window.setTimeout(() => {
+      setCurrentScreen("explorer");
+    }, 240);
+  }, [versions, executeSearch, raInput, decInput, collectionMode, band, radius, size]);
+
+  const handleBackToEntry = useCallback(() => {
+    setLoadingProgress(0);
+    setCurrentScreen("entry");
+  }, []);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setActivePresetId(null);
+    setTargetName(t.chrono.customSkyPatch);
+    setSecondMapOpen(true);
     void executeSearch(raInput, decInput, collectionMode, band, radius, size);
   };
+
+  const handleSubmitCoords = useCallback(
+    (raStr: string, decStr: string) => {
+      setActivePresetId(null);
+      setResolvedObject(null);
+      setTargetName(t.chrono.customSkyPatch);
+      setSecondMapOpen(true);
+      void executeSearch(raStr, decStr, collectionMode, band, radius, size);
+    },
+    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
+  );
 
   const handleSelectPreset = useCallback(
     async (preset: TargetPreset) => {
       setActivePresetId(preset.id);
+      setTargetName(preset.label);
       setRaInput(preset.ra);
       setDecInput(preset.dec);
       setCollectionMode(preset.collection);
+      setSecondMapOpen(true);
 
       setResolvingName(true);
       try {
@@ -308,12 +469,39 @@ export default function App() {
       );
       setActivePresetId(matchingPreset?.id ?? null);
 
+      if (matchingPreset) {
+        setTargetName(matchingPreset.label);
+        setRaInput(matchingPreset.ra);
+        setDecInput(matchingPreset.dec);
+        setCollectionMode(matchingPreset.collection);
+        setSecondMapOpen(true);
+        try {
+          const resolved = await resolveCelestialName(matchingPreset.queryName);
+          setResolvedObject(resolved);
+        } catch {
+          setResolvedObject(null);
+        } finally {
+          setResolvingName(false);
+        }
+        await executeSearch(
+          matchingPreset.ra,
+          matchingPreset.dec,
+          matchingPreset.collection,
+          band,
+          radius,
+          size
+        );
+        return;
+      }
+
       try {
         const resolved = await resolveCelestialName(name);
         setResolvedObject(resolved);
+        setTargetName(resolved.canonicalName);
         setRaInput(resolved.raHms);
         setDecInput(resolved.decDms);
         setCollectionMode("spherex_dr1");
+        setSecondMapOpen(true);
         await executeSearch(resolved.raHms, resolved.decDms, "spherex_dr1", band, radius, size);
       } catch {
         setStatusState({ type: "objectNotFound", name });
@@ -324,22 +512,54 @@ export default function App() {
     [band, executeSearch, radius, size, t.presets]
   );
 
+  const handleToggleMolecule = useCallback(
+    (mol: MoleculeSignature) => {
+      setActiveMolecules((prev) => {
+        const next = new Set(prev);
+        if (next.has(mol.id)) {
+          next.delete(mol.id);
+        } else {
+          next.add(mol.id);
+          // Tune HiPS channel to closest wavelength for this molecule
+          let bestIdx = 0;
+          let bestDiff = Infinity;
+          SPHEREX_HIPS_WAVELENGTHS_UM.forEach((w, idx) => {
+            const diff = Math.abs(w - mol.wavelengthUm);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = idx;
+            }
+          });
+          setExternalChannelIdx(bestIdx);
+
+          // If observations include the molecule's detector band, select it
+          const matchingObsIdx = observations.findIndex((o) => o.bandpass === mol.band);
+          if (matchingObsIdx >= 0) {
+            setSelectedIdx(matchingObsIdx);
+          }
+        }
+        return next;
+      });
+    },
+    [observations]
+  );
+
   const handleSelectCollection = (col: SpherexCollectionId) => {
     setActiveCollection(col);
     setSelectedIdx(0);
   };
 
-  const handleSelectVersionObservation = (
-    col: SpherexCollectionId,
-    targetObs: SpherexObservation
-  ) => {
-    setActiveCollection(col);
-    const colObs = versions?.[col]?.observations ?? [];
-    const foundIdx = colObs.findIndex(
-      (o) => o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass
-    );
-    setSelectedIdx(foundIdx >= 0 ? foundIdx : 0);
-  };
+  const handleSelectVersionObservation = useCallback(
+    (col: SpherexCollectionId, targetObs: SpherexObservation) => {
+      setActiveCollection(col);
+      const colObs = versions?.[col]?.observations ?? [];
+      const foundIdx = colObs.findIndex(
+        (o) => o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass
+      );
+      setSelectedIdx(foundIdx >= 0 ? foundIdx : 0);
+    },
+    [versions]
+  );
 
   const handleChangeFov = useCallback((newSize: number) => {
     const clamped = Number(Math.min(1.0, Math.max(0.02, newSize)).toFixed(3));
@@ -353,20 +573,148 @@ export default function App() {
       const decStr = decDeg.toFixed(5);
       setActivePresetId(null);
       setResolvedObject(null);
+      setTargetName(t.chrono.customSkyPatch);
       setRaInput(raStr);
       setDecInput(decStr);
+      setSecondMapOpen(true);
       void executeSearch(raStr, decStr, collectionMode, band, radius, size);
     },
-    [band, collectionMode, executeSearch, radius, size]
+    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
   );
 
   const selectedObs = observations[selectedIdx] ?? null;
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col">
-      <Navbar />
+    <div className="relative h-screen w-screen overflow-hidden bg-[#080B10] text-slate-100 select-none">
+      {/* Background Dimmed Galaxy Canvas */}
+      <canvas ref={galaxyCanvasRef} id="galaxy-bg" />
 
-      <main className="flex-1 max-w-[1700px] w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-[360px_1fr_320px] gap-5 items-start">
+      {/* Persistent Top-Right Language Pill */}
+      <div className="fixed top-6 right-7 z-30">
+        <LanguageSelector />
+      </div>
+
+      {/* ===================================================================== */}
+      {/* SCREEN 1: ENTRY (Explore the space + Free Navigation Hero Card)       */}
+      {/* ===================================================================== */}
+      <section
+        id="screen-entry"
+        className={`screen ${
+          currentScreen === "entry" ? "is-active" : "is-hidden"
+        } flex-col items-center justify-center px-6`}
+      >
+        <h1 className="text-4xl sm:text-5xl font-bold tracking-[-0.025em] text-white mb-9 text-center">
+          {t.chrono.entryTitle}
+        </h1>
+
+        <div
+          id="hero-start-card"
+          role="button"
+          tabIndex={0}
+          onClick={() => void launchExplorer()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              void launchExplorer();
+            }
+          }}
+          className="hero-card relative w-full max-w-[460px] rounded-[24px] p-10 flex flex-col items-center text-center cursor-pointer overflow-hidden"
+        >
+          {/* Subtle inner starfield shimmer inside card */}
+          <canvas
+            ref={cardStarsRef}
+            id="card-stars"
+            className="absolute inset-0 w-full h-full opacity-75 pointer-events-none"
+          />
+
+          <div className="relative z-10 flex flex-col items-center">
+            {/* Rocket Icon */}
+            <div className="mb-5 text-[#00D2FF] drop-shadow-[0_0_16px_rgba(0,210,255,0.55)]">
+              <svg
+                className="w-12 h-12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+              </svg>
+            </div>
+
+            <h2 className="text-2xl sm:text-[28px] font-semibold tracking-[-0.015em] text-white mb-1.5">
+              {t.chrono.heroTitle}
+            </h2>
+            <p className="text-sm text-slate-300/90 mb-7">{t.chrono.heroSubtitle}</p>
+
+            <span className="btn-press inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#00D2FF]/15 border border-[#00D2FF]/70 text-[#00D2FF] text-sm font-medium shadow-[0_0_24px_rgba(0,210,255,0.22)]">
+              {t.chrono.heroCta}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* ===================================================================== */}
+      {/* SCREEN 2: LOADING TRANSITION (Analyzing space... with Rocket)         */}
+      {/* ===================================================================== */}
+      <section
+        id="screen-loading"
+        className={`screen ${
+          currentScreen === "loading" ? "is-active" : "is-hidden"
+        } items-center justify-center px-6`}
+      >
+        <div className="glass-panel rounded-[24px] px-10 py-8 flex flex-col items-center text-center min-w-[300px]">
+          {/* Animated Launching Rocket */}
+          <div className="relative mb-5 flex items-center justify-center">
+            <div className="rocket-animate text-[#00D2FF] drop-shadow-[0_0_20px_rgba(0,210,255,0.6)]">
+              <svg
+                className="w-12 h-12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path
+                  className="flame-animate"
+                  d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"
+                  stroke="#FFB703"
+                />
+                <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+              </svg>
+            </div>
+          </div>
+
+          <p className="text-base font-medium tracking-tight text-white mb-4">
+            {t.chrono.loadingLabel}
+          </p>
+
+          {/* Razor-thin progress bar */}
+          <div className="w-56 h-[3px] rounded-full bg-white/10 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[#00D2FF] shadow-[0_0_12px_#00D2FF] transition-all duration-300 ease-out"
+              style={{ width: `${loadingProgress}%` }}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* ===================================================================== */}
+      {/* SCREEN 3: MAIN EXPLORER (Sidebar + Live Sky Viewport(s) + Epoch Bar)  */}
+      {/* ===================================================================== */}
+      <section
+        id="screen-explorer"
+        className={`screen ${
+          currentScreen === "explorer" ? "is-active" : "is-hidden"
+        } p-5 pt-16 sm:p-7 sm:pt-16 gap-5 flex-col lg:flex-row`}
+      >
         <ControlsPanel
           raInput={raInput}
           setRaInput={setRaInput}
@@ -392,9 +740,16 @@ export default function App() {
           resolvingName={resolvingName}
           resolvedObject={resolvedObject}
           activePresetId={activePresetId}
+          totalFound={totalFound}
+          activeMolecules={activeMolecules}
+          onToggleMolecule={handleToggleMolecule}
+          onBackToEntry={handleBackToEntry}
+          onChangeFov={handleChangeFov}
+          onSubmitCoords={handleSubmitCoords}
           onSubmit={handleSubmit}
           onSelectPreset={handleSelectPreset}
           onSearchCelestialName={handleSearchCelestialName}
+          onOpenExposuresDrawer={() => setShowExposuresModal(true)}
         />
 
         <ViewerPanel
@@ -402,6 +757,7 @@ export default function App() {
           cutout={cutout}
           cutoutLoading={cutoutLoading}
           lastCoords={lastCoords}
+          targetName={targetName}
           showCrosshair={showCrosshair}
           status={status}
           siaUrl={siaUrl}
@@ -411,22 +767,44 @@ export default function App() {
           stretch={stretch}
           colormap={colormap}
           subtractZodi={subtractZodi}
+          secondMapOpen={secondMapOpen}
+          onToggleSecondMap={setSecondMapOpen}
+          externalChannelIdx={externalChannelIdx}
           onChangeFov={handleChangeFov}
           onSelectVersionObservation={handleSelectVersionObservation}
           onQueryAtCoords={handleQueryAtCoords}
         />
+      </section>
 
-        <ObservationsPanel
-          observations={observations}
-          totalFound={totalFound}
-          selectedIdx={selectedIdx}
-          onSelect={(idx) => setSelectedIdx(idx)}
-          loading={loading}
-          versions={versions}
-          activeCollection={activeCollection}
-          onSelectCollection={handleSelectCollection}
-        />
-      </main>
+      {/* Optional FITS Exposures Drawer / Modal */}
+      {showExposuresModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-end p-4">
+          <div className="relative h-full max-h-[92vh] flex flex-col">
+            <button
+              type="button"
+              onClick={() => setShowExposuresModal(false)}
+              className="btn-press glass-panel absolute -top-2 -left-3 z-10 w-8 h-8 rounded-full flex items-center justify-center text-slate-200 hover:text-white cursor-pointer"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <ObservationsPanel
+              observations={observations}
+              totalFound={totalFound}
+              selectedIdx={selectedIdx}
+              onSelect={(idx) => {
+                setSelectedIdx(idx);
+                setSecondMapOpen(true);
+                setShowExposuresModal(false);
+              }}
+              loading={loading}
+              versions={versions}
+              activeCollection={activeCollection}
+              onSelectCollection={handleSelectCollection}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
