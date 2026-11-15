@@ -214,6 +214,9 @@ export interface Translations {
     heroCta: string;
     loadingLabel: string;
     backButton: string;
+    panelLabel: string;
+    togglePanelOpen: string;
+    togglePanelClose: string;
     searchByCoords: string;
     coordsInputPlaceholder: string;
     goButton: string;
@@ -498,6 +501,9 @@ export const translations: Record<Language, Translations> = {
       heroCta: "Comenzar →",
       loadingLabel: "Analizando el espacio...",
       backButton: "Volver",
+      panelLabel: "Controles",
+      togglePanelOpen: "Abrir panel de controles",
+      togglePanelClose: "Cerrar panel de controles",
       searchByCoords: "Buscador por coordenadas",
       coordsInputPlaceholder: "RA, Dec (ej. 133.79, -7.24)",
       goButton: "Ir",
@@ -876,6 +882,9 @@ export const translations: Record<Language, Translations> = {
       heroCta: "Start →",
       loadingLabel: "Analyzing space...",
       backButton: "Back",
+      panelLabel: "Controls",
+      togglePanelOpen: "Open controls panel",
+      togglePanelClose: "Close controls panel",
       searchByCoords: "Search by Coordinates",
       coordsInputPlaceholder: "RA, Dec (e.g. 133.79, -7.24)",
       goButton: "Go",

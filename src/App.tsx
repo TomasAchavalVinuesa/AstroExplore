@@ -1,5 +1,5 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import {
   ControlsPanel,
   type MoleculeSignature,
@@ -58,6 +58,7 @@ export default function App() {
 
   // Dual-map split state: false = 1 map (100% width), true = 2 maps dividing the original map space in 2
   const [secondMapOpen, setSecondMapOpen] = useState<boolean>(false);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [showExposuresModal, setShowExposuresModal] = useState<boolean>(false);
 
   // Active molecular signatures & tuned HiPS spectral channel
@@ -446,11 +447,6 @@ export default function App() {
     }, 240);
   }, [versions, executeSearch, raInput, decInput, collectionMode, band, radius, size]);
 
-  const handleBackToEntry = useCallback(() => {
-    setLoadingProgress(0);
-    setCurrentScreen("entry");
-  }, []);
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setActivePresetId(null);
@@ -626,6 +622,31 @@ export default function App() {
       {/* Background Dimmed Galaxy Canvas */}
       <canvas ref={galaxyCanvasRef} id="galaxy-bg" />
 
+      {/* Top-Left Sidebar Toggle Pill (Explorer only) */}
+      {currentScreen === "explorer" && (
+        <div className="fixed top-6 left-5 sm:left-7 z-30">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? t.chrono.togglePanelClose : t.chrono.togglePanelOpen}
+            title={sidebarOpen ? t.chrono.togglePanelClose : t.chrono.togglePanelOpen}
+            className={`btn-press glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-2 text-xs font-medium cursor-pointer transition-colors ${
+              sidebarOpen
+                ? "border-[#00D2FF]/60 text-[#00D2FF] bg-[#00D2FF]/10"
+                : "text-slate-200 hover:text-white hover:border-[#00D2FF]/45"
+            }`}
+          >
+            {sidebarOpen ? (
+              <PanelLeftClose className="w-3.5 h-3.5 text-[#00D2FF]" />
+            ) : (
+              <PanelLeftOpen className="w-3.5 h-3.5 text-[#00D2FF]" />
+            )}
+            <span>{t.chrono.panelLabel}</span>
+          </button>
+        </div>
+      )}
+
       {/* Persistent Top-Right Language Pill */}
       <div className="fixed top-6 right-7 z-30">
         <LanguageSelector />
@@ -750,44 +771,61 @@ export default function App() {
         id="screen-explorer"
         className={`screen ${
           currentScreen === "explorer" ? "is-active" : "is-hidden"
-        } p-5 pt-16 sm:p-7 sm:pt-16 gap-5 flex-col lg:flex-row`}
+        } p-5 pt-16 sm:p-7 sm:pt-16 flex-col lg:flex-row`}
       >
-        <ControlsPanel
-          raInput={raInput}
-          setRaInput={setRaInput}
-          decInput={decInput}
-          setDecInput={setDecInput}
-          collectionMode={collectionMode}
-          setCollectionMode={setCollectionMode}
-          band={band}
-          setBand={setBand}
-          radius={radius}
-          setRadius={setRadius}
-          size={size}
-          setSize={setSize}
-          stretch={stretch}
-          setStretch={setStretch}
-          colormap={colormap}
-          setColormap={setColormap}
-          subtractZodi={subtractZodi}
-          setSubtractZodi={setSubtractZodi}
-          showCrosshair={showCrosshair}
-          setShowCrosshair={setShowCrosshair}
-          loading={loading}
-          resolvingName={resolvingName}
-          resolvedObject={resolvedObject}
-          activePresetId={activePresetId}
-          totalFound={totalFound}
-          activeMolecules={activeMolecules}
-          onToggleMolecule={handleToggleMolecule}
-          onBackToEntry={handleBackToEntry}
-          onChangeFov={handleChangeFov}
-          onSubmitCoords={handleSubmitCoords}
-          onSubmit={handleSubmit}
-          onSelectPreset={handleSelectPreset}
-          onSearchCelestialName={handleSearchCelestialName}
-          onOpenExposuresDrawer={() => setShowExposuresModal(true)}
-        />
+        <div
+          aria-hidden={!sidebarOpen}
+          className={`shrink-0 overflow-hidden transition-[width,max-height,margin,opacity] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+            sidebarOpen
+              ? "w-full max-h-[46vh] mb-5 opacity-100 lg:w-[310px] lg:max-h-full lg:mb-0 lg:mr-5"
+              : "w-full max-h-0 mb-0 opacity-0 pointer-events-none lg:w-0 lg:max-h-full lg:mb-0 lg:mr-0"
+          }`}
+        >
+          <div
+            className={`w-full lg:w-[310px] h-full transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+              sidebarOpen
+                ? "translate-y-0 lg:translate-x-0"
+                : "-translate-y-3 lg:translate-y-0 lg:-translate-x-5"
+            }`}
+          >
+            <ControlsPanel
+              raInput={raInput}
+              setRaInput={setRaInput}
+              decInput={decInput}
+              setDecInput={setDecInput}
+              collectionMode={collectionMode}
+              setCollectionMode={setCollectionMode}
+              band={band}
+              setBand={setBand}
+              radius={radius}
+              setRadius={setRadius}
+              size={size}
+              setSize={setSize}
+              stretch={stretch}
+              setStretch={setStretch}
+              colormap={colormap}
+              setColormap={setColormap}
+              subtractZodi={subtractZodi}
+              setSubtractZodi={setSubtractZodi}
+              showCrosshair={showCrosshair}
+              setShowCrosshair={setShowCrosshair}
+              loading={loading}
+              resolvingName={resolvingName}
+              resolvedObject={resolvedObject}
+              activePresetId={activePresetId}
+              totalFound={totalFound}
+              activeMolecules={activeMolecules}
+              onToggleMolecule={handleToggleMolecule}
+              onClose={() => setSidebarOpen(false)}
+              onChangeFov={handleChangeFov}
+              onSubmitCoords={handleSubmitCoords}
+              onSubmit={handleSubmit}
+              onSelectPreset={handleSelectPreset}
+              onSearchCelestialName={handleSearchCelestialName}
+              onOpenExposuresDrawer={() => setShowExposuresModal(true)}
+            />
+          </div>
+        </div>
 
         <ViewerPanel
           selectedObs={selectedObs}

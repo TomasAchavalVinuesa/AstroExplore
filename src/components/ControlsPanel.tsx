@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -7,6 +7,7 @@ import {
   Loader2,
   Sliders,
   Sparkles,
+  X,
 } from "lucide-react";
 import type {
   CollectionQueryMode,
@@ -64,7 +65,7 @@ interface ControlsPanelProps {
   totalFound?: number;
   activeMolecules?: Set<string>;
   onToggleMolecule?: (mol: MoleculeSignature) => void;
-  onBackToEntry?: () => void;
+  onClose?: () => void;
   onChangeFov?: (newSize: number) => void;
   onSubmitCoords?: (raStr: string, decStr: string) => void;
   onSubmit: (e: React.FormEvent) => void;
@@ -98,7 +99,7 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   totalFound = 0,
   activeMolecules: externalMolecules,
   onToggleMolecule,
-  onBackToEntry,
+  onClose,
   onChangeFov,
   onSubmitCoords,
   onSubmit,
@@ -204,18 +205,21 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   const numericSize = Math.min(0.5, Math.max(0.05, Number(size) || 0.12));
 
   return (
-    <aside className="glass-panel rounded-[22px] w-full lg:w-[310px] shrink-0 p-5 flex flex-col justify-between gap-4 overflow-y-auto max-h-full">
+    <aside className="glass-panel rounded-[22px] w-full lg:w-[310px] h-full shrink-0 p-5 flex flex-col justify-between gap-4 overflow-y-auto max-h-full">
       <div className="space-y-4">
-        {/* Back to Entry */}
-        {onBackToEntry && (
-          <button
-            type="button"
-            onClick={onBackToEntry}
-            className="btn-press inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white cursor-pointer"
-          >
-            <span>←</span>
-            <span>{t.chrono.backButton}</span>
-          </button>
+        {/* Close Panel */}
+        {onClose && (
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t.chrono.togglePanelClose}
+              title={t.chrono.togglePanelClose}
+              className="btn-press w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         )}
 
         {/* Search by Coordinates */}
