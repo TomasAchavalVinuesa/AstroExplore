@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   BarChart3,
@@ -9,6 +10,7 @@ import {
   Dna,
   FlaskConical,
   GitCompareArrows,
+  HelpCircle,
   Loader2,
   MapPin,
   Orbit,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
 import { ChemicalFormula, Latex } from "./Latex";
+import { RoiTutorial } from "./RoiTutorial";
 import { formatDectoDMS, formatRAtoHMS } from "../lib/coordinates";
 import { compareRoiReadings } from "../lib/spectralAnalysis";
 import {
@@ -80,8 +83,9 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
   onShowTrajectoryOnMap,
   onClose,
 }) => {
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
   const isEn = language === "en";
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"current" | "compare" | "trajectory">(initialTab);
   const [proportionMode, setProportionMode] = useState<"spectral" | "molar">("spectral");
   const [saveName, setSaveName] = useState<string>("");
@@ -303,11 +307,16 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
     setSaveName("");
   };
 
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-3 sm:p-5"
-      onClick={onClose}
-    >
+  return createPortal(
+    <>
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-3 sm:p-5"
+        onClick={() => {
+          if (!tutorialOpen) onClose();
+        }}
+      >
       <div
         className="w-full max-w-4xl max-h-[90vh] rounded-3xl border border-white/15 bg-[#070B19]/95 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
@@ -333,7 +342,16 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div id="roi-tut-header-tabs" className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setTutorialOpen(true)}
+              title={t.roiTutorial.buttonTitle}
+              className="btn-press px-2.5 py-1.5 rounded-xl bg-white/[0.05] hover:bg-[#00D2FF]/15 border border-white/10 hover:border-[#00D2FF]/45 text-[11px] font-medium text-slate-200 hover:text-[#00D2FF] flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-[#00D2FF]" />
+              <span className="hidden sm:inline">{t.roiTutorial.buttonLabel}</span>
+            </button>
             {/* Tabs */}
             <div className="inline-flex items-center p-0.5 rounded-xl bg-black/50 border border-white/10 text-[11px]">
               {roi && (
@@ -403,7 +421,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
           {activeTab === "current" && roi ? (
             <>
               {/* Real Coverage + Scan Trigger */}
-              <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div
+                id="roi-tut-coverage"
+                className="rounded-2xl bg-white/[0.03] border border-white/10 p-3.5 flex flex-wrap items-center justify-between gap-3"
+              >
                 <div className="space-y-0.5 text-xs">
                   <div className="flex items-center gap-2 text-slate-200 font-medium">
                     <span>{isEn ? "Real FITS Coverage:" : "Cobertura FITS Real:"}</span>
@@ -459,6 +480,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
               {/* Save Reading Temporarily */}
               {!isScanning && analysis && (
                 <form
+                  id="roi-tut-save"
                   onSubmit={handleSaveSubmit}
                   className="rounded-2xl bg-emerald-500/5 border border-emerald-400/25 p-3 flex flex-wrap items-center justify-between gap-2.5"
                 >
@@ -504,7 +526,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
 
               {/* Mini Spectrum Plot */}
               {plotData && (
-                <div className="rounded-2xl bg-black/50 border border-white/10 p-3 space-y-1.5">
+                <div
+                  id="roi-tut-spectrum"
+                  className="rounded-2xl bg-black/50 border border-white/10 p-3 space-y-1.5"
+                >
                   <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
                     <span>
                       {isEn
@@ -602,7 +627,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
 
               {/* Probabilistic Celestial Body Classification & Habitability Assessment */}
               {analysis && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div id="roi-tut-classification" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {/* Card 1: Celestial Body Classification */}
                   <div className="rounded-2xl bg-white/[0.03] border border-[#00D2FF]/25 p-4 space-y-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -872,7 +897,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
               )}
 
               {/* Relative Proportions Section */}
-              <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-3">
+              <div
+                id="roi-tut-composition"
+                className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-3"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <BarChart3 className="w-4 h-4 text-[#00D2FF]" />
@@ -980,7 +1008,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
 
               {/* Detailed Species Table */}
               {analysis && (
-                <div className="rounded-2xl border border-white/10 overflow-hidden">
+                <div id="roi-tut-table" className="rounded-2xl border border-white/10 overflow-hidden">
                   <div className="px-4 py-2.5 bg-white/[0.04] border-b border-white/10 flex items-center justify-between">
                     <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-[#00D2FF]" />
@@ -1085,7 +1113,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
               ) : (
                 <>
                   {/* Selectors for Region A and Region B */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div id="roi-tut-compare-selectors" className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-3 space-y-1.5">
                       <label className="text-[11px] font-mono text-[#00D2FF] uppercase tracking-wider">
                         {isEn ? "Region A" : "Región A"}
@@ -1133,7 +1161,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         : "Seleccioná dos lecturas distintas para comparar."}
                     </div>
                   ) : comparison ? (
-                    <div className="rounded-2xl bg-white/[0.04] border border-white/12 p-4 space-y-3">
+                    <div
+                      id="roi-tut-compare-similarity"
+                      className="rounded-2xl bg-white/[0.04] border border-white/12 p-4 space-y-3"
+                    >
                       {comparison.insufficientOverlap || comparison.overallSimilarityPct === null ? (
                         <div className="flex items-start gap-2.5 text-xs text-amber-200">
                           <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
@@ -1291,7 +1322,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
 
               {/* Saved Readings List */}
               {savedReadings.length > 0 && (
-                <div className="rounded-2xl border border-white/10 overflow-hidden">
+                <div
+                  id="roi-tut-compare-saved"
+                  className="rounded-2xl border border-white/10 overflow-hidden"
+                >
                   <div className="px-4 py-2.5 bg-white/[0.04] border-b border-white/10 text-xs font-semibold text-slate-200">
                     {isEn
                       ? `Saved Readings in Browser (${savedReadings.length})`
@@ -1347,7 +1381,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
               ) : (
                 <>
                   {/* Step 1: Multi-select readings (1 per image/epoch) */}
-                  <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-2.5">
+                  <div
+                    id="roi-tut-traj-select"
+                    className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-2.5"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="text-xs font-semibold text-white">
                         {isEn
@@ -1431,6 +1468,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                   {/* Step 2: Chemical Identity Verification */}
                   {selectedTrajectoryReadings.length >= 2 && (
                     <div
+                      id="roi-tut-traj-identity"
                       className={`rounded-2xl border p-4 space-y-2 ${identityCheck.confidence === "high"
                           ? "bg-emerald-500/10 border-emerald-400/40"
                           : identityCheck.confidence === "moderate"
@@ -1502,7 +1540,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
 
                   {/* Step 3: Trajectory & Extrapolation */}
                   {identityCheck.compatible && trajectoryResult && (
-                    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-4">
+                    <div
+                      id="roi-tut-traj-kinematics"
+                      className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-4"
+                    >
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <h4 className="text-xs font-semibold text-white">
                           {isEn
@@ -1625,6 +1666,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                       )}
 
                       {/* Target Date Picker + Quick Offsets */}
+                      <div id="roi-tut-traj-extrapolate" className="space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <label className="flex items-center gap-1.5 text-xs text-slate-300">
                           <Calendar className="w-3.5 h-3.5 text-amber-300" />
@@ -1712,6 +1754,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                           )}
                         </div>
                       )}
+                      </div>
                     </div>
                   )}
                 </>
@@ -1720,6 +1763,14 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+      </div>
+
+      <RoiTutorial
+        open={tutorialOpen}
+        activeTab={activeTab}
+        onClose={() => setTutorialOpen(false)}
+      />
+    </>,
+    document.body
   );
 };

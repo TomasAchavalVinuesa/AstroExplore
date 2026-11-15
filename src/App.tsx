@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, PanelLeftClose, PanelLeftOpen, Search, Volume2, VolumeX, X } from "lucide-react";
 import { ControlsPanel } from "./components/ControlsPanel";
+import { EntryTutorial } from "./components/EntryTutorial";
+import { ExplorerTutorial } from "./components/ExplorerTutorial";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { NewSearchModal } from "./components/NewSearchModal";
 import { ObservationsPanel } from "./components/ObservationsPanel";
@@ -22,6 +24,7 @@ import {
 } from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
 import { NasaApiDownError } from "./lib/apiError";
+import { MusicBeatAnalyser } from "./lib/musicAnalyser";
 import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
 import { clearUrlState, parseUrlState, syncUrlState } from "./lib/urlState";
 import { useLanguage } from "./i18n/LanguageContext";
@@ -154,10 +157,15 @@ export default function App() {
   const cosmicBgRef = useRef<CosmicBackgroundHandle | null>(null);
   const [cursorSky, setCursorSky] = useState<{ ra: number; dec: number } | null>(null);
   const [cursorAudioEnabled, setCursorAudioEnabled] = useState(true);
-  const ENTRY_MUSIC_VOLUME = 0.78;
-  const EXPLORER_MUSIC_VOLUME = 0.14;
+  const ENTRY_MUSIC_VOLUME = 0.15;
+  const EXPLORER_MUSIC_VOLUME = 0.03;
+  const [entryVolume, setEntryVolume] = useState<number>(ENTRY_MUSIC_VOLUME);
   const [explorerVolume, setExplorerVolume] = useState<number>(EXPLORER_MUSIC_VOLUME);
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const musicAnalyserRef = useRef<MusicBeatAnalyser | null>(null);
+  if (!musicAnalyserRef.current) {
+    musicAnalyserRef.current = new MusicBeatAnalyser();
+  }
   const prevScreenRef = useRef<ScreenId>(currentScreen);
   const [warping, setWarping] = useState(false);
 
@@ -1128,21 +1136,23 @@ export default function App() {
   // Sync background music volume, mute state, and autoplay
   useEffect(() => {
     const audio = bgAudioRef.current;
+    const analyser = musicAnalyserRef.current;
     if (!audio) return;
 
-    const targetVol = currentScreen === "entry" ? ENTRY_MUSIC_VOLUME : explorerVolume;
+    const targetVol = currentScreen === "entry" ? entryVolume : explorerVolume;
     audio.loop = true;
-    audio.muted = !cursorAudioEnabled;
-    audio.volume = cursorAudioEnabled ? targetVol : 0;
+    analyser?.attach(audio);
+    analyser?.setOutput(targetVol, cursorAudioEnabled);
 
     if (cursorAudioEnabled && audio.paused) {
       void audio.play().catch(() => {});
     }
-  }, [currentScreen, cursorAudioEnabled, explorerVolume]);
+  }, [currentScreen, cursorAudioEnabled, entryVolume, explorerVolume]);
 
   // Restart background music and lower volume when leaving the entry screen
   useEffect(() => {
     const audio = bgAudioRef.current;
+    const analyser = musicAnalyserRef.current;
     const prevScreen = prevScreenRef.current;
     prevScreenRef.current = currentScreen;
 
@@ -1150,7 +1160,8 @@ export default function App() {
     if (prevScreen === "entry" && currentScreen !== "entry") {
       audio.currentTime = 0;
       setExplorerVolume(EXPLORER_MUSIC_VOLUME);
-      audio.volume = cursorAudioEnabled ? EXPLORER_MUSIC_VOLUME : 0;
+      analyser?.attach(audio);
+      analyser?.setOutput(EXPLORER_MUSIC_VOLUME, cursorAudioEnabled);
       audio.loop = true;
       if (cursorAudioEnabled) {
         void audio.play().catch(() => {});
@@ -1158,11 +1169,14 @@ export default function App() {
     }
   }, [currentScreen, cursorAudioEnabled]);
 
-  // Unlock background music autoplay on first user interaction if blocked by browser policy
+  // Unlock background music autoplay & Web Audio beat analyser on first user interaction
   useEffect(() => {
     const tryPlayBgMusic = () => {
       const audio = bgAudioRef.current;
-      if (!audio || !cursorAudioEnabled || !audio.paused) return;
+      if (!audio) return;
+      musicAnalyserRef.current?.attach(audio);
+      musicAnalyserRef.current?.unlock();
+      if (!cursorAudioEnabled || !audio.paused) return;
       void audio.play().catch(() => {});
     };
 
@@ -1174,6 +1188,14 @@ export default function App() {
     };
   }, [cursorAudioEnabled]);
 
+  const sampleMusic = useCallback(
+    (dt: number) =>
+      musicAnalyserRef.current?.sample(dt) ?? { bass: 0, mid: 0, energy: 0, beat: 0 },
+    []
+  );
+
+  const activeVolume = currentScreen === "entry" ? entryVolume : explorerVolume;
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#080B10] text-slate-100 select-none">
       {/* Background Space Music */}
@@ -1184,12 +1206,14 @@ export default function App() {
         mode={currentScreen === "explorer" ? "explorer" : "gate"}
         cursorAudio={currentScreen === "entry" && cursorAudioEnabled}
         onCursorSky={setCursorSky}
+        sampleMusic={sampleMusic}
       />
 
       {/* Top-Left Back & Sidebar Toggle Pills (Explorer only) */}
       {currentScreen === "explorer" && (
         <div className="fixed top-6 left-5 sm:left-7 z-30 flex items-center gap-2">
           <button
+            id="tutorial-exp-back"
             type="button"
             onClick={() => {
               setSidebarOpen(false);
@@ -1204,6 +1228,7 @@ export default function App() {
           </button>
 
           <button
+            id="tutorial-exp-panel"
             type="button"
             onClick={() => setSidebarOpen((open) => !open)}
             aria-expanded={sidebarOpen}
@@ -1224,6 +1249,7 @@ export default function App() {
           </button>
 
           <button
+            id="tutorial-exp-new-search"
             type="button"
             onClick={() => setNewSearchOpen(true)}
             aria-label={t.chrono.newSearchButton}
@@ -1234,17 +1260,19 @@ export default function App() {
             <span>{t.chrono.newSearchButton}</span>
           </button>
 
-          <ShareButton
-            variant="pill"
-            ra={raInput}
-            dec={decInput}
-            collection={collectionMode}
-            band={band}
-            size={size}
-            stretch={stretch}
-            colormap={colormap}
-            subtractZodi={subtractZodi}
-          />
+          <div id="tutorial-exp-share">
+            <ShareButton
+              variant="pill"
+              ra={raInput}
+              dec={decInput}
+              collection={collectionMode}
+              band={band}
+              size={size}
+              stretch={stretch}
+              colormap={colormap}
+              subtractZodi={subtractZodi}
+            />
+          </div>
         </div>
       )}
 
@@ -1255,8 +1283,12 @@ export default function App() {
           onClick={() => {
             setCursorAudioEnabled((prev) => {
               const next = !prev;
-              if (next && explorerVolume === 0) {
-                setExplorerVolume(EXPLORER_MUSIC_VOLUME);
+              if (next && activeVolume === 0) {
+                if (currentScreen === "entry") {
+                  setEntryVolume(ENTRY_MUSIC_VOLUME);
+                } else {
+                  setExplorerVolume(EXPLORER_MUSIC_VOLUME);
+                }
               }
               return next;
             });
@@ -1280,34 +1312,36 @@ export default function App() {
           </span>
         </button>
 
-        {currentScreen !== "entry" && (
-          <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={cursorAudioEnabled ? explorerVolume : 0}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
+        <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-2">
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={cursorAudioEnabled ? activeVolume : 0}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              if (currentScreen === "entry") {
+                setEntryVolume(val);
+              } else {
                 setExplorerVolume(val);
-                if (val > 0 && !cursorAudioEnabled) {
-                  setCursorAudioEnabled(true);
-                } else if (val === 0 && cursorAudioEnabled) {
-                  setCursorAudioEnabled(false);
-                }
-              }}
-              aria-label={t.chrono.musicVolumeAria}
-              title={`${t.chrono.musicVolumeAria}: ${Math.round(
-                (cursorAudioEnabled ? explorerVolume : 0) * 100
-              )}%`}
-              className="apple-slider w-20 sm:w-24 cursor-pointer"
-            />
-            <span className="text-[11px] font-mono text-slate-300 w-8 text-right tabular-nums">
-              {Math.round((cursorAudioEnabled ? explorerVolume : 0) * 100)}%
-            </span>
-          </div>
-        )}
+              }
+              if (val > 0 && !cursorAudioEnabled) {
+                setCursorAudioEnabled(true);
+              } else if (val === 0 && cursorAudioEnabled) {
+                setCursorAudioEnabled(false);
+              }
+            }}
+            aria-label={t.chrono.musicVolumeAria}
+            title={`${t.chrono.musicVolumeAria}: ${Math.round(
+              (cursorAudioEnabled ? activeVolume : 0) * 100
+            )}%`}
+            className="apple-slider w-20 sm:w-24 cursor-pointer"
+          />
+          <span className="text-[11px] font-mono text-slate-300 w-8 text-right tabular-nums">
+            {Math.round((cursorAudioEnabled ? activeVolume : 0) * 100)}%
+          </span>
+        </div>
         <LanguageSelector />
       </div>
 
@@ -1333,6 +1367,14 @@ export default function App() {
           onLaunchToCoords={(params) => void launchToCoords(params)}
         />
       </section>
+
+      <EntryTutorial active={currentScreen === "entry"} />
+      <ExplorerTutorial
+        active={currentScreen === "explorer"}
+        sidebarOpen={sidebarOpen}
+        secondMapOpen={secondMapOpen}
+        onToggleSecondMap={handleToggleSecondMap}
+      />
 
       {/* ===================================================================== */}
       {/* SCREEN 2: LOADING TRANSITION (Analyzing space... with Rocket)         */}

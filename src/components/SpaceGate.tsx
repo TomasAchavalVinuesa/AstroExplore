@@ -23,6 +23,7 @@ import {
 } from "../lib/coordinates";
 import { useLanguage } from "../i18n/LanguageContext";
 import { CursorAudioEngine } from "../lib/cursorAudio";
+import type { MusicMetrics } from "../lib/musicAnalyser";
 import { CoordinateFormatToggle } from "./CoordinateFormatToggle";
 import type {
   CollectionQueryMode,
@@ -88,6 +89,7 @@ export interface CosmicBackgroundProps {
   mode?: "gate" | "explorer";
   cursorAudio?: boolean;
   onCursorSky?: (sky: { ra: number; dec: number } | null) => void;
+  sampleMusic?: (dt: number) => MusicMetrics;
 }
 
 const DEG = Math.PI / 180;
@@ -203,12 +205,13 @@ function viewToSky(
 }
 
 export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgroundProps>(
-  function CosmicBackground({ mode = "gate", cursorAudio = true, onCursorSky }, ref) {
+  function CosmicBackground({ mode = "gate", cursorAudio = true, onCursorSky, sampleMusic }, ref) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const modeRef = useRef(mode);
     const cursorAudioRef = useRef(cursorAudio);
     const audioEngineRef = useRef<CursorAudioEngine | null>(null);
     const onCursorSkyRef = useRef(onCursorSky);
+    const sampleMusicRef = useRef(sampleMusic);
     const warpRef = useRef<{
       start: number;
       duration: number;
@@ -221,6 +224,7 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
     modeRef.current = mode;
     cursorAudioRef.current = cursorAudio;
     onCursorSkyRef.current = onCursorSky;
+    sampleMusicRef.current = sampleMusic;
 
     useEffect(() => {
       if (mode !== "gate" || !cursorAudio) {
@@ -469,6 +473,11 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
         ctx.fillRect(0, 0, w, h);
 
         const fade = 1 - dim * 0.62;
+        const gateFactor = reduced ? 0 : 1 - dim;
+        const music: MusicMetrics =
+          !reduced && modeRef.current === "gate" && sampleMusicRef.current
+            ? sampleMusicRef.current(dt)
+            : { bass: 0, mid: 0, energy: 0, beat: 0 };
 
         const neb = [
           [w * 0.22, h * 0.28, Math.max(w, h) * 0.45, "0,140,200", 0.1],
@@ -488,8 +497,10 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
 
         const vpX = w / 2 + focusX * w - nx * 14;
         const vpY = h / 2 + focusY * h - ny * 14;
-        const speed = reduced ? 0 : 0.012 + warp * 1.9;
-        const scale = Math.max(w, h) * 0.5;
+        const musicSpeedBoost = gateFactor * (music.bass * 0.045 + music.beat * 0.09);
+        const speed = reduced ? 0 : 0.012 + warp * 1.9 + musicSpeedBoost;
+        const scale =
+          Math.max(w, h) * 0.5 * (1 + gateFactor * (music.bass * 0.025 + music.beat * 0.045));
         for (const s of stars) {
           s.pz = s.z;
           s.z -= speed * dt * (warp > 0 ? 1 : 0.4);
@@ -502,7 +513,11 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
           const px = vpX + (s.x / s.z) * scale * 0.5;
           const py = vpY + (s.y / s.z) * scale * 0.5;
           if (px < -50 || px > w + 50 || py < -50 || py > h + 50) continue;
-          const bright = Math.min(1, (1 - s.z) * 1.3 + 0.15) * fade;
+          const bright =
+            Math.min(
+              1,
+              ((1 - s.z) * 1.3 + 0.15) * (1 + gateFactor * (music.energy * 0.3 + music.beat * 0.45))
+            ) * fade;
           if (warp > 0.05) {
             const ox = vpX + (s.x / s.pz) * scale * 0.5;
             const oy = vpY + (s.y / s.pz) * scale * 0.5;
@@ -516,13 +531,17 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
             ctx.lineTo(px + (ox - px) * tail, py + (oy - py) * tail);
             ctx.stroke();
           } else {
-            const size = (1 - s.z) * 1.6 + 0.4;
+            const size = ((1 - s.z) * 1.6 + 0.4) * (1 + gateFactor * music.beat * 0.45);
             ctx.fillStyle = `rgba(226,236,255,${bright * 0.75})`;
             ctx.fillRect(px, py, size, size);
           }
         }
 
-        const gScale = Math.min(w, h) * (0.5 + dim * 0.1) * (1 + warp * 2.6);
+        const gScale =
+          Math.min(w, h) *
+          (0.5 + dim * 0.1) *
+          (1 + warp * 2.6) *
+          (1 + gateFactor * (music.bass * 0.055 + music.beat * 0.075));
         const gcx = w * 0.5 - nx * 26 + focusX * w * 0.5;
         const gcy = h * 0.5 - ny * 18 + focusY * h * 0.5;
         const tilt = (62 + ny * 7) * DEG;
@@ -535,7 +554,7 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
         const mx = mouse.sx;
         const my = mouse.sy;
         const presence = mouse.inside && !reduced ? 1 - dim : 0;
-        const spin = reduced ? 0 : dt;
+        const spin = reduced ? 0 : dt * (1 + gateFactor * (music.energy * 1.4 + music.beat * 2.4));
 
         for (const p of galaxy) {
           p.theta += p.omega * spin * (1 + warp * 6);
@@ -563,16 +582,19 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
             }
           }
           if (sx < -4 || sx > w + 4 || sy < -4 || sy > h + 4) continue;
-          const alpha = Math.min(1, (p.alpha + boost) * galaxyAlpha * (0.6 + persp * 0.4));
+          const alpha = Math.min(
+            1,
+            (p.alpha + boost) * galaxyAlpha * (0.6 + persp * 0.4) * (1 + gateFactor * music.beat * 0.28)
+          );
           if (alpha < 0.02) continue;
           ctx.fillStyle = `rgba(${p.rgb},${alpha})`;
-          const size = p.size * persp * (1 + warp * 0.8);
+          const size = p.size * persp * (1 + warp * 0.8 + gateFactor * music.beat * 0.35);
           ctx.fillRect(sx, sy, size, size);
         }
 
-        const coreR = gScale * 0.22;
+        const coreR = gScale * (0.22 + gateFactor * music.beat * 0.04);
         const core = ctx.createRadialGradient(gcx, gcy, 0, gcx, gcy, coreR);
-        core.addColorStop(0, `rgba(255,214,140,${0.32 * galaxyAlpha})`);
+        core.addColorStop(0, `rgba(255,214,140,${(0.32 + gateFactor * music.beat * 0.16) * galaxyAlpha})`);
         core.addColorStop(0.4, `rgba(255,170,60,${0.1 * galaxyAlpha})`);
         core.addColorStop(1, "rgba(0,0,0,0)");
         ctx.fillStyle = core;
@@ -1008,6 +1030,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
 
         {/* BLOQUE OBLIGATORIO 1 — Search by Coordinates (HMS / DMS or Degrees) */}
         <form
+          id="tutorial-coords-card"
           onSubmit={handleSearchSubmit}
           className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-3"
         >
@@ -1121,6 +1144,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
 
         {/* BLOQUE OBLIGATORIO 2 — Example Celestial Bodies */}
         <div
+          id="tutorial-presets-card"
           ref={dropdownRef}
           className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-2.5 relative z-30"
         >

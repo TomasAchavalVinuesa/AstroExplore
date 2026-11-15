@@ -1199,6 +1199,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
   return (
     <div
+      id="tutorial-exp-map1"
       ref={mapViewportRef}
       className={`relative w-full h-full overflow-hidden border border-white/15 bg-black shadow-2xl select-none overscroll-none ${
         isFullscreen ? "rounded-none" : "rounded-[22px]"
@@ -1373,7 +1374,10 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
           </div>
 
           {/* Bottom-Left Layer & Zoom Pill Controls */}
-          <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+          <div
+            id="tutorial-exp-map1-controls"
+            className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none"
+          >
             <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] pointer-events-auto flex-wrap">
               <button
                 type="button"
