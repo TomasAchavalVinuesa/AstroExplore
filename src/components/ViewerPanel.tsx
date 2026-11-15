@@ -14,11 +14,8 @@ import {
   Minus,
   Play,
   Plus,
-  RotateCcw,
   Sparkles,
   X,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
 import type {
   CollectionVersionData,
@@ -104,7 +101,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 }) => {
   const { t, language } = useLanguage();
   const isEn = language === "en";
-  const [cutoutZoom, setCutoutZoom] = useState<number>(1);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDraggingCutout, setIsDraggingCutout] = useState<boolean>(false);
   const [secondMapTab, setSecondMapTab] = useState<
@@ -490,11 +486,11 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
   const currentFov = clampCutoutFov(lastCoords?.size ?? DEFAULT_CUTOUT_FOV_DEG);
   const fovScale = MAX_CUTOUT_FOV_DEG / currentFov;
-  const totalCutoutScale = fovScale * cutoutZoom;
+  const totalCutoutScale = fovScale;
   const canPanCutout = totalCutoutScale > 1.001;
   const cutoutHalfSpan = Math.min(0.5, 0.5 / totalCutoutScale);
 
-  // Mouse wheel zoom inside Map 2 (FITS Cutout viewport)
+  // Mouse wheel FOV zoom inside Map 2 (FITS Cutout viewport)
   useEffect(() => {
     const el = cutoutViewportRef.current;
     if (!el) return;
@@ -503,19 +499,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       e.preventDefault();
       e.stopPropagation();
       if (e.deltaY === 0) return;
-      if (e.deltaY > 0 && cutoutZoom <= 1 && currentFov < MAX_CUTOUT_FOV_DEG) {
-        onChangeFov(clampCutoutFov(currentFov * 1.15));
-        return;
-      }
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      setCutoutZoom((prev) => Number(Math.max(1, Math.min(6, prev * factor)).toFixed(2)));
+      const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
+      onChangeFov(clampCutoutFov(currentFov * factor));
     };
 
     el.addEventListener("wheel", onNativeWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onNativeWheel);
     };
-  }, [secondMapOpen, secondMapTab, cutout, cutoutZoom, currentFov, onChangeFov]);
+  }, [secondMapOpen, secondMapTab, cutout, currentFov, onChangeFov]);
 
   // Representative D1..D6 observations for Map 2 "Bands" mode
   const bandRepresentatives = useMemo(() => {
@@ -1172,7 +1164,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                     )}
                   </div>
 
-                  {/* Zoom & Download Actions */}
+                  {/* Download Actions */}
                   <div className="flex items-center gap-1.5 pointer-events-auto">
                     {displayCutout && (
                       <>
@@ -1197,47 +1189,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         </a>
                       </>
                     )}
-
-                    <div className="glass-panel rounded-full px-2.5 py-1 flex items-center gap-1 text-xs text-slate-300">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCutoutZoom((z) => Math.min(6, Number((z * 1.25).toFixed(2))))
-                        }
-                        className="p-0.5 hover:text-white cursor-pointer"
-                        title={t.viewer.zoomInTitle}
-                      >
-                        <ZoomIn className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="font-mono text-[10px] text-[#00D2FF] px-1">
-                        {cutoutZoom.toFixed(1)}×
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCutoutZoom((z) => Math.max(1, Number((z / 1.25).toFixed(2))))
-                        }
-                        className="p-0.5 hover:text-white cursor-pointer"
-                        title={t.viewer.zoomOutTitle}
-                      >
-                        <ZoomOut className="w-3.5 h-3.5" />
-                      </button>
-                      {(cutoutZoom !== 1 ||
-                        Math.abs(panOffset.x) > 1e-4 ||
-                        Math.abs(panOffset.y) > 1e-4) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCutoutZoom(1);
-                            setPanOffset({ x: 0, y: 0 });
-                          }}
-                          className="p-0.5 hover:text-white border-l border-white/10 pl-1 cursor-pointer"
-                          title={t.viewer.visualZoomReset}
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
                   </div>
                 </div>
               </div>

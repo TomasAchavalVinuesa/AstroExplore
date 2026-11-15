@@ -9,13 +9,9 @@ import React, {
 } from "react";
 import {
   AlertCircle,
-  ArrowLeftRight,
   CheckCircle2,
   ChevronDown,
-  Compass,
   Loader2,
-  PencilLine,
-  Radio,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -25,7 +21,6 @@ import {
   parseDec as baseParseDec,
   parseRA as baseParseRA,
 } from "../lib/coordinates";
-import { resolveCelestialName } from "../lib/celestialResolver";
 import { useLanguage } from "../i18n/LanguageContext";
 import type {
   CollectionQueryMode,
@@ -42,10 +37,9 @@ import type {
  * Incluye todo el inicio en un solo archivo listo para enchufar:
  * 1. `CosmicBackground`: Galaxia espiral + vórtice 3D en Canvas con efecto presencia
  *    del mouse, grilla astronómica RA/Dec y salto warp de 1.2s (`warpTo`).
- * 2. `SpaceGate`: HUD de telemetría espacial + Tarjeta Hero (Free Navigation con botón
- *    magnético) + Buscador por Coordenadas (HMS/DMS ⇄ Grados con validación en vivo)
- *    + Buscador por Cuerpo Celeste (Custom Input conectado a CDS Sesame + los 5 objetos
- *    de referencia con tipeo telemetría).
+ * 2. `SpaceGate`: Tarjeta Hero (Free Navigation con botón magnético) + Buscador por
+ *    Coordenadas (HMS/DMS ⇄ Grados con validación en vivo) + Selector de los 5 cuerpos
+ *    celestes de ejemplo con tipeo telemetría.
  */
 
 export function parseRAFlexible(raw: string): number | null {
@@ -661,7 +655,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
   setRaInput,
   decInput,
   setDecInput,
-  cursorSky: externalCursorSky,
   warping = false,
   loading = false,
   withBackground = false,
@@ -673,14 +666,9 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
   const isEn = language === "en";
 
   const internalBgRef = useRef<CosmicBackgroundHandle | null>(null);
-  const [internalCursorSky, setInternalCursorSky] = useState<{ ra: number; dec: number } | null>(
-    null
-  );
-  const cursorSky = externalCursorSky !== undefined ? externalCursorSky : internalCursorSky;
 
   const cardStarsRef = useRef<HTMLCanvasElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const customNameInputRef = useRef<HTMLInputElement | null>(null);
   const typingTimerRef = useRef<number | null>(null);
 
   const [magOffset, setMagOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -688,11 +676,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
   const [isTypingTelemetry, setIsTypingTelemetry] = useState(false);
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [selectedTargetId, setSelectedTargetId] = useState<string | "custom">("wise_0855");
-  const [customQuery, setCustomQuery] = useState("");
-  const [resolvingCustom, setResolvingCustom] = useState(false);
-  const [customResolved, setCustomResolved] = useState<ResolvedCelestialObject | null>(null);
-  const [customError, setCustomError] = useState<string | null>(null);
+  const [selectedTargetId, setSelectedTargetId] = useState<string>("wise_0855");
 
   const raDeg = useMemo(() => parseRAFlexible(raInput), [raInput]);
   const decDeg = useMemo(() => parseDecFlexible(decInput), [decInput]);
@@ -796,10 +780,11 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
     [setRaInput, setDecInput]
   );
 
-  const handleToggleCoordinateFormat = () => {
+  const isCurrentlyDecimal = isDecimalFormat(raInput) && isDecimalFormat(decInput);
+
+  const handleSetCoordinateFormat = (mode: "hms" | "deg") => {
     if (raDeg === null || decDeg === null) return;
-    const currentlyDecimal = isDecimalFormat(raInput) && isDecimalFormat(decInput);
-    if (currentlyDecimal) {
+    if (mode === "hms") {
       setRaInput(formatRAtoHMS(raDeg));
       setDecInput(formatDectoDMS(decDeg));
     } else {
@@ -811,42 +796,8 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
 
   const handlePickKnownTarget = (target: GateKnownTarget) => {
     setSelectedTargetId(target.id);
-    setCustomError(null);
-    setCustomResolved(null);
     setDropdownOpen(false);
     animateTelemetryFill(target.raHms, target.decDms);
-  };
-
-  const handlePickCustomOption = () => {
-    setSelectedTargetId("custom");
-    setDropdownOpen(false);
-    setCustomError(null);
-    window.setTimeout(() => {
-      customNameInputRef.current?.focus();
-    }, 40);
-  };
-
-  const handleResolveCustomName = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const q = customQuery.trim();
-    if (!q) return;
-
-    setResolvingCustom(true);
-    setCustomError(null);
-    try {
-      const resolved = await resolveCelestialName(q);
-      setCustomResolved(resolved);
-      animateTelemetryFill(resolved.raHms, resolved.decDms);
-    } catch {
-      setCustomResolved(null);
-      setCustomError(
-        isEn
-          ? `Could not resolve "${q}" in CDS Sesame (SIMBAD/NED/VizieR).`
-          : `No se encontró "${q}" en CDS Sesame (SIMBAD/NED/VizieR).`
-      );
-    } finally {
-      setResolvingCustom(false);
-    }
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -870,20 +821,13 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
     setCoordError(null);
 
     const activeKnown =
-      selectedTargetId !== "custom"
-        ? GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? null
-        : null;
+      GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? null;
 
     const matchingPreset = activeKnown
       ? t.presets.find((p) => p.id === activeKnown.id) ?? null
       : null;
 
-    const label =
-      selectedTargetId === "custom" && customResolved
-        ? customResolved.canonicalName
-        : activeKnown
-          ? activeKnown.label
-          : undefined;
+    const label = activeKnown ? activeKnown.label : undefined;
 
     if (withBackground && internalBgRef.current) {
       void internalBgRef.current.warpTo({ ra: raDeg, dec: decDeg }, 1200);
@@ -896,7 +840,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
       decDeg,
       targetLabel: label,
       preset: matchingPreset,
-      resolved: selectedTargetId === "custom" ? customResolved : null,
+      resolved: null,
     });
   };
 
@@ -911,9 +855,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
   };
 
   const activeKnownTarget =
-    selectedTargetId !== "custom"
-      ? GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? GATE_KNOWN_TARGETS[0]
-      : null;
+    GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? GATE_KNOWN_TARGETS[0];
 
   return (
     <div className="relative w-full h-full flex flex-col items-center justify-center px-4 sm:px-6 py-8 overflow-y-auto">
@@ -921,57 +863,8 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
         <CosmicBackground
           ref={internalBgRef}
           mode={backgroundMode}
-          onCursorSky={setInternalCursorSky}
         />
       )}
-
-      {/* HUD DE TELEMETRÍA ESPACIAL EN LAS ESQUINAS */}
-      <div className="pointer-events-none fixed top-5 left-6 z-20 hidden sm:flex flex-col gap-1.5 font-mono text-[11px]">
-        <div className="glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-3 border border-white/10">
-          <span className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
-            <span>IRSA SIA API: ONLINE</span>
-          </span>
-          <span className="text-slate-600">·</span>
-          <span className="text-[#00D2FF]">
-            {isEn ? "EPOCH: SPHEREx DR1 / QR3" : "ÉPOCA: SPHEREx DR1 / QR3"}
-          </span>
-        </div>
-
-        <div className="glass-panel rounded-xl px-3.5 py-1.5 flex items-center gap-2.5 text-[11px] text-slate-300 border border-white/10">
-          <Compass className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
-          {cursorSky ? (
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400">RA</span>
-              <span className="text-white font-semibold">{formatRAtoHMS(cursorSky.ra)}</span>
-              <span className="text-slate-500">({cursorSky.ra.toFixed(3)}°)</span>
-              <span className="text-slate-600">|</span>
-              <span className="text-slate-400">Dec</span>
-              <span className="text-white font-semibold">{formatDectoDMS(cursorSky.dec)}</span>
-              <span className="text-slate-500">
-                ({cursorSky.dec >= 0 ? "+" : ""}
-                {cursorSky.dec.toFixed(3)}°)
-              </span>
-            </div>
-          ) : (
-            <span className="text-slate-400">
-              {isEn
-                ? "CURSOR: Move across the sky sphere"
-                : "CURSOR: Mové el puntero por la esfera celeste"}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="pointer-events-none fixed bottom-4 left-6 z-20 hidden md:flex items-center gap-2 font-mono text-[10px] text-slate-400/90">
-        <Radio className="w-3 h-3 text-[#00D2FF]" />
-        <span>NASA/IPAC IRSA · ICRS J2000 · 102 BANDS (0.75–5.00 µm · D1–D6)</span>
-      </div>
-
-      <div className="pointer-events-none fixed bottom-4 right-6 z-20 hidden md:flex items-center gap-2 font-mono text-[10px] text-slate-400/90">
-        <span>CDS SESAME (SIMBAD · NED · VIZIER)</span>
-        <span className="w-1.5 h-1.5 rounded-full bg-[#00D2FF]" />
-      </div>
 
       {/* CONTENEDOR CENTRAL CON LOS 3 BLOQUES */}
       <div className="relative z-10 w-full max-w-[540px] flex flex-col gap-3.5 my-auto">
@@ -1061,27 +954,50 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
               </h3>
             </div>
 
-            <button
-              type="button"
-              onClick={handleToggleCoordinateFormat}
-              disabled={!coordsValid}
+            <div
+              role="group"
+              aria-label={isEn ? "Coordinate format" : "Formato de coordenadas"}
               title={
                 isEn
-                  ? "Convert between sexagesimal (HMS/DMS) and decimal degrees"
-                  : "Convertir entre sexagesimal (HMS/DMS) y grados decimales"
+                  ? "Switch between sexagesimal (HMS/DMS) and decimal degrees (DEG)"
+                  : "Cambiar entre sexagesimal (HMS/DMS) y grados decimales (DEG)"
               }
-              className="btn-press inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.05] hover:bg-[#00D2FF]/15 border border-white/10 hover:border-[#00D2FF]/50 text-[11px] font-mono text-[#00D2FF] disabled:opacity-40 cursor-pointer"
+              className="inline-flex items-center p-0.5 rounded-xl bg-black/55 border border-white/12 shrink-0"
             >
-              <ArrowLeftRight className="w-3 h-3" />
-              <span>HMS/DMS ⇄ DEG</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => handleSetCoordinateFormat("hms")}
+                disabled={!coordsValid}
+                aria-pressed={!isCurrentlyDecimal}
+                className={`px-2 py-0.5 rounded-[9px] text-[10px] font-mono transition-all cursor-pointer disabled:opacity-40 ${
+                  !isCurrentlyDecimal
+                    ? "bg-[#00D2FF]/20 text-[#00D2FF] border border-[#00D2FF]/55 font-semibold shadow-[0_0_10px_rgba(0,210,255,0.22)]"
+                    : "text-slate-400 hover:text-slate-200 border border-transparent"
+                }`}
+              >
+                HMS/DMS
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetCoordinateFormat("deg")}
+                disabled={!coordsValid}
+                aria-pressed={isCurrentlyDecimal}
+                className={`px-2 py-0.5 rounded-[9px] text-[10px] font-mono transition-all cursor-pointer disabled:opacity-40 ${
+                  isCurrentlyDecimal
+                    ? "bg-[#00D2FF]/20 text-[#00D2FF] border border-[#00D2FF]/55 font-semibold shadow-[0_0_10px_rgba(0,210,255,0.22)]"
+                    : "text-slate-400 hover:text-slate-200 border border-transparent"
+                }`}
+              >
+                DEG
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <label htmlFor="gate-ra-input" className="font-mono text-slate-300 font-medium">
-                  RA <span className="text-slate-500">(00h 00m 00.0s | 0.0000°)</span>
+                  RA
                 </label>
                 {raDeg !== null ? (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -1099,7 +1015,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                   setCoordError(null);
                 }}
                 placeholder="00h 00m 00.0s / 0.0000°"
-                className={`w-full rounded-xl bg-black/50 border px-3 py-2 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
+                className={`w-full rounded-xl bg-black/50 border px-3 py-1.5 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
                   isTypingTelemetry
                     ? "border-[#00D2FF] text-[#00D2FF] shadow-[0_0_14px_rgba(0,210,255,0.25)]"
                     : raDeg !== null
@@ -1107,24 +1023,17 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                       : "border-amber-400/60 focus:border-amber-400"
                 }`}
               />
-              <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between px-0.5">
-                {raDeg !== null ? (
-                  <>
-                    <span>{formatRAtoHMS(raDeg)}</span>
-                    <span className="text-[#00D2FF]">{raDeg.toFixed(4)}°</span>
-                  </>
-                ) : (
-                  <span className="text-amber-300/90">
-                    {isEn ? "Invalid RA format" : "Formato RA inválido"}
-                  </span>
-                )}
-              </div>
+              {raDeg === null && (
+                <div className="text-[10px] font-mono text-amber-300/90 px-0.5">
+                  {isEn ? "Invalid RA format" : "Formato RA inválido"}
+                </div>
+              )}
             </div>
 
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <label htmlFor="gate-dec-input" className="font-mono text-slate-300 font-medium">
-                  Dec <span className="text-slate-500">(+00° 00&apos; 00&quot; | +0.0000°)</span>
+                  Dec
                 </label>
                 {decDeg !== null ? (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -1142,7 +1051,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                   setCoordError(null);
                 }}
                 placeholder="+00° 00' 00&quot; / +0.0000°"
-                className={`w-full rounded-xl bg-black/50 border px-3 py-2 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
+                className={`w-full rounded-xl bg-black/50 border px-3 py-1.5 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
                   isTypingTelemetry
                     ? "border-[#00D2FF] text-[#00D2FF] shadow-[0_0_14px_rgba(0,210,255,0.25)]"
                     : decDeg !== null
@@ -1150,21 +1059,11 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                       : "border-amber-400/60 focus:border-amber-400"
                 }`}
               />
-              <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between px-0.5">
-                {decDeg !== null ? (
-                  <>
-                    <span>{formatDectoDMS(decDeg)}</span>
-                    <span className="text-[#00D2FF]">
-                      {decDeg >= 0 ? "+" : ""}
-                      {decDeg.toFixed(4)}°
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-amber-300/90">
-                    {isEn ? "Invalid Dec format" : "Formato Dec inválido"}
-                  </span>
-                )}
-              </div>
+              {decDeg === null && (
+                <div className="text-[10px] font-mono text-amber-300/90 px-0.5">
+                  {isEn ? "Invalid Dec format" : "Formato Dec inválido"}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1195,7 +1094,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
           </button>
         </form>
 
-        {/* BLOQUE OBLIGATORIO 2 — Search by Celestial Body */}
+        {/* BLOQUE OBLIGATORIO 2 — Example Celestial Bodies */}
         <div
           ref={dropdownRef}
           className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-2.5 relative"
@@ -1205,8 +1104,8 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
               <h3 className="text-xs sm:text-sm font-semibold text-white tracking-tight">
                 {isEn
-                  ? "Search by Celestial Body (Type Name or Select Known Object)"
-                  : "Buscar por Cuerpo Celeste (Escribí un Nombre o Elegí un Objeto)"}
+                  ? "You can start with some example celestial bodies"
+                  : "Puedes comenzar con algunos cuerpos celestes de ejemplo"}
               </h3>
             </div>
           </div>
@@ -1217,36 +1116,20 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
             aria-expanded={dropdownOpen}
             className="btn-press w-full rounded-xl bg-black/55 hover:bg-black/70 border border-white/15 hover:border-[#00D2FF]/60 px-3.5 py-2.5 flex items-center justify-between gap-2 text-left cursor-pointer"
           >
-            {selectedTargetId === "custom" ? (
-              <div className="flex items-center gap-2.5 min-w-0">
-                <PencilLine className="w-4 h-4 text-[#00D2FF] shrink-0" />
-                <span className="text-xs sm:text-sm font-medium text-white truncate">
-                  {customResolved
-                    ? customResolved.canonicalName
-                    : isEn
-                      ? "Type a name..."
-                      : "Escribir un nombre..."}
+            <div className="flex items-center justify-between w-full min-w-0 pr-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-[#00D2FF] shrink-0" />
+                <span className="text-xs sm:text-sm font-semibold text-white truncate">
+                  {activeKnownTarget.label}
                 </span>
-                <span className="px-2 py-0.5 rounded-md bg-[#00D2FF]/15 border border-[#00D2FF]/45 text-[10px] font-mono text-[#00D2FF] shrink-0">
-                  Custom Input
+                <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
+                  — {isEn ? activeKnownTarget.subtitleEn : activeKnownTarget.subtitleEs}
                 </span>
               </div>
-            ) : (
-              <div className="flex items-center justify-between w-full min-w-0 pr-1">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2 h-2 rounded-full bg-[#00D2FF] shrink-0" />
-                  <span className="text-xs sm:text-sm font-semibold text-white truncate">
-                    {activeKnownTarget?.label}
-                  </span>
-                  <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
-                    — {isEn ? activeKnownTarget?.subtitleEn : activeKnownTarget?.subtitleEs}
-                  </span>
-                </div>
-                <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
-                  ({activeKnownTarget?.shortCoords})
-                </span>
-              </div>
-            )}
+              <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
+                ({activeKnownTarget.shortCoords})
+              </span>
+            </div>
             <ChevronDown
               className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
                 dropdownOpen ? "rotate-180 text-[#00D2FF]" : ""
@@ -1254,72 +1137,8 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
             />
           </button>
 
-          {selectedTargetId === "custom" && (
-            <form onSubmit={handleResolveCustomName} className="pt-1 space-y-2">
-              <div className="flex gap-2">
-                <input
-                  ref={customNameInputRef}
-                  type="text"
-                  value={customQuery}
-                  onChange={(e) => setCustomQuery(e.target.value)}
-                  placeholder={
-                    isEn
-                      ? "Type any star, brown dwarf, nebula or galaxy (e.g. Vega, M101, Sirius)..."
-                      : "Escribí cualquier estrella, enana marrón o galaxia (ej. Vega, M101, Sirius)..."
-                  }
-                  className="w-full rounded-xl bg-black/60 border border-[#00D2FF]/50 px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#00D2FF]"
-                />
-                <button
-                  type="submit"
-                  disabled={resolvingCustom || !customQuery.trim()}
-                  className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-[#00D2FF]/20 hover:bg-[#00D2FF]/30 border border-[#00D2FF]/60 text-xs font-semibold text-[#00D2FF] cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {resolvingCustom ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <span>{isEn ? "Resolve" : "Resolver"}</span>
-                  )}
-                </button>
-              </div>
-              {customResolved && (
-                <div className="rounded-xl bg-[#00D2FF]/10 border border-[#00D2FF]/35 px-3 py-1.5 text-[11px] flex items-center justify-between text-slate-200">
-                  <span className="truncate">
-                    <strong className="text-white font-mono">{customResolved.canonicalName}</strong>{" "}
-                    <span className="text-slate-400">({customResolved.otype})</span>
-                  </span>
-                  <span className="font-mono text-[10px] text-[#00D2FF] shrink-0 ml-2">
-                    {customResolved.resolverSource}
-                  </span>
-                </div>
-              )}
-              {customError && (
-                <div className="rounded-xl bg-rose-500/10 border border-rose-400/40 px-3 py-1.5 text-[11px] text-rose-200">
-                  {customError}
-                </div>
-              )}
-            </form>
-          )}
-
           {dropdownOpen && (
-            <div className="mt-1 rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] overflow-hidden divide-y divide-white/10">
-              <button
-                type="button"
-                onClick={handlePickCustomOption}
-                className={`w-full px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
-                  selectedTargetId === "custom"
-                    ? "bg-[#00D2FF]/15 text-white"
-                    : "hover:bg-white/[0.06] text-slate-200"
-                }`}
-              >
-                <span className="flex items-center gap-2.5 text-xs sm:text-[13px] font-medium">
-                  <span aria-hidden="true">✏️</span>
-                  <span>{isEn ? "Type a name..." : "Escribir un nombre..."}</span>
-                </span>
-                <span className="px-2 py-0.5 rounded-md bg-[#00D2FF]/20 border border-[#00D2FF]/50 text-[10px] font-mono text-[#00D2FF] font-semibold">
-                  Custom Input
-                </span>
-              </button>
-
+            <div className="mt-1 max-h-[172px] overflow-y-auto rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] divide-y divide-white/10">
               {GATE_KNOWN_TARGETS.map((item) => {
                 const active = selectedTargetId === item.id;
                 return (

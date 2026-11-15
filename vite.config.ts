@@ -19,12 +19,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/irsa-proxy/, ""),
       },
-      // Proxy de respaldo para el resolvedor de nombres astronómicos CDS Sesame (SIMBAD/NED/VizieR)
-      "/sesame-proxy": {
-        target: "https://cds.unistra.fr",
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/sesame-proxy/, ""),
-      },
     },
   },
 });

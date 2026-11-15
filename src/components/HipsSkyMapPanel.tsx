@@ -5,8 +5,6 @@ import {
   Crosshair,
   Globe,
   Grid,
-  Layers,
-  Loader2,
   MapPin,
   RotateCcw,
   Search,
@@ -20,14 +18,11 @@ import { formatDectoDMS, formatRAtoHMS } from "../lib/coordinates";
 import {
   getBandLabelForChannel,
   getHealpixCellCenter,
-  getHealpixCellCorners,
   getOrLoadHipsTile,
   healpixFaceXYToRaDec,
-  loadSpherexMoc,
   nest2xyInFace,
   parseSRegionPolygon,
   SPHEREX_HIPS_WAVELENGTHS_UM,
-  type MocCell,
 } from "../lib/hips";
 import type {
   ColormapName,
@@ -375,14 +370,8 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
   const [channelIdx, setChannelIdx] = useState<number>(0);
   const [showChannelBar, setShowChannelBar] = useState<boolean>(false);
 
-  const [showMocWide, setShowMocWide] = useState<boolean>(false);
-  const [showMocDeep, setShowMocDeep] = useState<boolean>(true);
   const [showFootprints, setShowFootprints] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
-
-  const [mocWideCells, setMocWideCells] = useState<MocCell[] | null>(null);
-  const [mocDeepCells, setMocDeepCells] = useState<MocCell[] | null>(null);
-  const [loadingMoc, setLoadingMoc] = useState<boolean>(false);
 
   const [cursorCoords, setCursorCoords] = useState<{ ra: number; dec: number } | null>(null);
   const [renderTick, setRenderTick] = useState<number>(0);
@@ -451,39 +440,6 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondMapOpen, observations, targetCoords?.ra, targetCoords?.dec]);
-
-  // Cargar MOC de SPHEREx cuando se activa una capa MOC
-  useEffect(() => {
-    let active = true;
-    const loadNeeded = async () => {
-      if (showMocDeep && !mocDeepCells) {
-        setLoadingMoc(true);
-        try {
-          const cells = await loadSpherexMoc("deepField");
-          if (active) setMocDeepCells(cells);
-        } catch {
-          // Ignorar fallo silencioso de red
-        } finally {
-          if (active) setLoadingMoc(false);
-        }
-      }
-      if (showMocWide && !mocWideCells) {
-        setLoadingMoc(true);
-        try {
-          const cells = await loadSpherexMoc("obscore");
-          if (active) setMocWideCells(cells);
-        } catch {
-          // Ignorar fallo silencioso de red
-        } finally {
-          if (active) setLoadingMoc(false);
-        }
-      }
-    };
-    void loadNeeded();
-    return () => {
-      active = false;
-    };
-  }, [showMocDeep, showMocWide, mocDeepCells, mocWideCells]);
 
   const activeOrder = fovDeg > 85 ? 0 : fovDeg > 38 ? 1 : fovDeg > 16 ? 2 : fovDeg > 7 ? 3 : 4;
 
@@ -652,83 +608,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       }
     }
 
-    // 2. Superposición de Cobertura MOC (Multi-Order Coverage) de SPHEREx
-    const drawMocCells = (cells: MocCell[] | null, fillStyle: string, strokeStyle: string) => {
-      if (!cells || cells.length === 0) return;
-      ctx.save();
-      ctx.fillStyle = fillStyle;
-      ctx.strokeStyle = strokeStyle;
-      ctx.lineWidth = 0.75;
-
-      for (const cell of cells) {
-        if (!isAitoff) {
-          const center = getHealpixCellCenter(cell.order, cell.npix);
-          const cProj = projectRaDecToCanvas(
-            center.ra,
-            center.dec,
-            ra0,
-            dec0,
-            scalePxPerRad,
-            cx,
-            cy
-          );
-          if (cProj.cosC < minCosVisibility) continue;
-        }
-
-        const corners = getHealpixCellCorners(cell.order, cell.npix);
-
-        if (isAitoff) {
-          const rotCorners = corners.map((c) => rotateToAitoffLonLat(c.ra, c.dec, ra0, dec0));
-          const lons = rotCorners.map((r) => r.lonDeg);
-          const minD = Math.min(...lons);
-          const maxD = Math.max(...lons);
-          const passes =
-            maxD - minD <= 180
-              ? [lons]
-              : [
-                  lons.map((d) => (d < 0 ? d + 360 : d)),
-                  lons.map((d) => (d > 0 ? d - 360 : d)),
-                ];
-          for (const passLons of passes) {
-            const pts = rotCorners.map((r, idx) =>
-              projectAitoffRaw(passLons[idx], r.latDeg, aitoffScale, cx, cy)
-            );
-            ctx.beginPath();
-            ctx.moveTo(pts[0].x, pts[0].y);
-            ctx.lineTo(pts[1].x, pts[1].y);
-            ctx.lineTo(pts[2].x, pts[2].y);
-            ctx.lineTo(pts[3].x, pts[3].y);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-          }
-        } else {
-          const pts = corners.map((c) =>
-            projectRaDecToCanvas(c.ra, c.dec, ra0, dec0, scalePxPerRad, cx, cy)
-          );
-          if (pts.some((p) => p.cosC <= 0)) continue;
-
-          ctx.beginPath();
-          ctx.moveTo(pts[0].x, pts[0].y);
-          ctx.lineTo(pts[1].x, pts[1].y);
-          ctx.lineTo(pts[2].x, pts[2].y);
-          ctx.lineTo(pts[3].x, pts[3].y);
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        }
-      }
-      ctx.restore();
-    };
-
-    if (showMocWide) {
-      drawMocCells(mocWideCells, "rgba(14, 165, 233, 0.12)", "rgba(56, 189, 248, 0.30)");
-    }
-    if (showMocDeep) {
-      drawMocCells(mocDeepCells, "rgba(168, 85, 247, 0.24)", "rgba(216, 180, 254, 0.68)");
-    }
-
-    // 3. Malla Celeste Ecuatorial (RA / Dec Graticule)
+    // 2. Malla Celeste Ecuatorial (RA / Dec Graticule)
     if (showGrid) {
       ctx.save();
       ctx.strokeStyle = isAitoff ? "rgba(148, 163, 184, 0.24)" : "rgba(148, 163, 184, 0.18)";
@@ -1014,12 +894,8 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     fovDeg,
     channelIdx,
     activeOrder,
-    showMocWide,
-    showMocDeep,
     showFootprints,
     showGrid,
-    mocWideCells,
-    mocDeepCells,
     observations,
     selectedObs,
     targetCoords,
@@ -1289,7 +1165,6 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
           {/* Top-Right Target Badge + Map Controls */}
           <div className="absolute top-4 right-4 flex items-center gap-2 flex-wrap justify-end max-w-[65%]">
             <div className="glass-panel rounded-full px-3.5 py-1.5 text-xs text-slate-200 font-medium flex items-center gap-2">
-              {loadingMoc && <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF]" />}
               <span className="truncate max-w-[160px]">{targetName}</span>
               <span className="text-[10px] font-mono text-[#00D2FF]">
                 {fovDeg >= AITOFF_THRESHOLD_FOV ? "AIT · " : ""}FOV {fovDeg.toFixed(0)}°
@@ -1313,30 +1188,6 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
           {/* Bottom-Left Layer & Zoom Pill Controls */}
           <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
             <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] pointer-events-auto flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowMocDeep((v) => !v)}
-                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-                  showMocDeep ? "bg-purple-500/30 text-purple-200" : "text-slate-400 hover:text-white"
-                }`}
-                title={t.skyMap.mocDeepLabel}
-              >
-                <Layers className="w-3 h-3" />
-                <span>Deep</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowMocWide((v) => !v)}
-                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-                  showMocWide ? "bg-sky-500/30 text-sky-200" : "text-slate-400 hover:text-white"
-                }`}
-                title={t.skyMap.mocWideLabel}
-              >
-                <Layers className="w-3 h-3" />
-                <span>Wide</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => setShowFootprints((v) => !v)}

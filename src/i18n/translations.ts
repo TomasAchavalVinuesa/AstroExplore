@@ -287,13 +287,13 @@ export const translations: Record<Language, Translations> = {
       english: "Inglés",
     },
     controls: {
-      celestialSearchTitle: "Buscador de Cuerpos Celestes (CDS Sesame)",
+      celestialSearchTitle: "Buscador de Cuerpos Celestes",
       celestialSearchLabel: "Nombre del cuerpo celeste",
       celestialSearchPlaceholder: "Ej. Barnard's Star, Epsilon Indi B, WISE 0855, RW Aurigae...",
       celestialSearchButton: "Resolver",
       celestialSearchingButton: "Buscando...",
       celestialSearchHelp:
-        "Resuelve coordenadas ICRS en tiempo real vía SIMBAD / NED / VizieR y consulta SPHEREx.",
+        "Resuelve coordenadas ICRS desde el catálogo de ejemplos SPHEREx.",
       resolvedBadgeTitle: "Identificador Astronómico Resuelto",
       resolvedTypeLabel: "Tipo:",
       resolvedPmLabel: "Mov. propio:",
@@ -488,10 +488,9 @@ export const translations: Record<Language, Translations> = {
         "Ascensión Recta (RA) inválida. Usa grados decimales (0–360) o formato HMS (ej. 08h55m10.831s).",
       invalidDec:
         "Declinación (Dec) inválida. Usa grados decimales (-90 a +90) o formato DMS (ej. -7d14m42.53s).",
-      resolvingObject: (name) =>
-        `Resolviendo coordenadas de "${name}" en CDS Sesame (SIMBAD / NED / VizieR)...`,
+      resolvingObject: (name) => `Resolviendo coordenadas de "${name}"...`,
       objectNotFound: (name) =>
-        `No se encontró el cuerpo celeste "${name}" en CDS Sesame. Verifica el nombre o ingresa las coordenadas RA/Dec.`,
+        `No se encontró el cuerpo celeste "${name}" en el catálogo de ejemplos. Selecciona un objeto destacado o ingresa las coordenadas RA/Dec.`,
       queryingSia: ({ ra, dec, collection }) =>
         `Consultando catálogo IRSA SIA en RA=${ra}°, Dec=${dec}° (${collection})...`,
       queryingAllVersions: ({ ra, dec }) =>
@@ -508,7 +507,7 @@ export const translations: Record<Language, Translations> = {
       fitsCanvasError: "No se pudo inicializar contexto 2D de Canvas.",
     },
     chrono: {
-      entryTitle: "Explore the space",
+      entryTitle: "Explora el espacio",
       heroTitle: "Navegación libre",
       heroSubtitle: "Descubrí las locuras del espacio",
       heroCta: "Comenzar →",
@@ -562,7 +561,7 @@ export const translations: Record<Language, Translations> = {
     urlError: {
       invalidTargetTitle: "Cuerpo celeste no válido",
       invalidTargetMessage: (name) =>
-        `El cuerpo celeste "${name}" no pudo ser encontrado en los catálogos astronómicos (CDS Sesame / SIMBAD). Verifica el nombre e inténtalo nuevamente.`,
+        `El cuerpo celeste "${name}" no se encuentra en el catálogo de ejemplos disponibles. Verifica el nombre o ingresa coordenadas RA/Dec.`,
       invalidCoordsTitle: "Coordenadas no válidas",
       invalidCoordsMessage: (coords) =>
         `Las coordenadas proporcionadas en el enlace${coords ? ` ("${coords}")` : ""} no son válidas. Usa un formato válido para RA (0–360° o HMS) y Dec (-90° a +90° o DMS).`,
@@ -680,13 +679,13 @@ export const translations: Record<Language, Translations> = {
       english: "English",
     },
     controls: {
-      celestialSearchTitle: "Celestial Body Search (CDS Sesame)",
+      celestialSearchTitle: "Celestial Body Search",
       celestialSearchLabel: "Celestial body name",
       celestialSearchPlaceholder: "E.g. Barnard's Star, Epsilon Indi B, WISE 0855, RW Aurigae...",
       celestialSearchButton: "Resolve",
       celestialSearchingButton: "Searching...",
       celestialSearchHelp:
-        "Resolves ICRS coordinates in real time via SIMBAD / NED / VizieR and queries SPHEREx.",
+        "Resolves ICRS coordinates from the SPHEREx example catalog.",
       resolvedBadgeTitle: "Resolved Astronomical Identifier",
       resolvedTypeLabel: "Type:",
       resolvedPmLabel: "Proper motion:",
@@ -881,10 +880,9 @@ export const translations: Record<Language, Translations> = {
         "Invalid Right Ascension (RA). Use decimal degrees (0–360) or HMS format (e.g. 08h55m10.831s).",
       invalidDec:
         "Invalid Declination (Dec). Use decimal degrees (-90 to +90) or DMS format (e.g. -7d14m42.53s).",
-      resolvingObject: (name) =>
-        `Resolving coordinates for "${name}" in CDS Sesame (SIMBAD / NED / VizieR)...`,
+      resolvingObject: (name) => `Resolving coordinates for "${name}"...`,
       objectNotFound: (name) =>
-        `Could not find celestial body "${name}" in CDS Sesame. Check the name or enter RA/Dec coordinates directly.`,
+        `Could not find celestial body "${name}" in the example catalog. Select a featured object or enter RA/Dec coordinates directly.`,
       queryingSia: ({ ra, dec, collection }) =>
         `Querying IRSA SIA catalog at RA=${ra}°, Dec=${dec}° (${collection})...`,
       queryingAllVersions: ({ ra, dec }) =>
@@ -955,7 +953,7 @@ export const translations: Record<Language, Translations> = {
     urlError: {
       invalidTargetTitle: "Invalid Celestial Body",
       invalidTargetMessage: (name) =>
-        `The celestial body "${name}" could not be found in astronomical catalogs (CDS Sesame / SIMBAD). Please check the name and try again.`,
+        `The celestial body "${name}" is not in the available example catalog. Please check the name or use RA/Dec coordinates.`,
       invalidCoordsTitle: "Invalid Coordinates",
       invalidCoordsMessage: (coords) =>
         `The coordinates provided in the link${coords ? ` ("${coords}")` : ""} are not valid. Please use a valid format for RA (0–360° or HMS) and Dec (-90° to +90° or DMS).`,
