@@ -167,5 +167,5 @@ In accordance with the NASA Space Apps Challenge 2026 submission guidelines:
 - **Tomás Achával** — Research & Analysis
 - **Joaquín Barrionuevo** — Astrophysics & Data
 - **Facundo Bazán** — UI/UX & Frontend
-- **Muriel / Uriel Domínguez** — Scientific Visualization
+- **Uriel Domínguez** — Scientific Visualization
 - **Jeremías Nolte** — Documentation & Review
