@@ -259,6 +259,13 @@ export interface Translations {
       pahs: string;
     };
   };
+  urlError: {
+    invalidTargetTitle: string;
+    invalidTargetMessage: (name: string) => string;
+    invalidCoordsTitle: string;
+    invalidCoordsMessage: (coords: string) => string;
+    dismissButton: string;
+  };
   presets: TargetPreset[];
 }
 
@@ -545,6 +552,15 @@ export const translations: Record<Language, Translations> = {
         nh3: "Amoníaco / Cianato",
         pahs: "PAHs",
       },
+    },
+    urlError: {
+      invalidTargetTitle: "Cuerpo celeste no válido",
+      invalidTargetMessage: (name) =>
+        `El cuerpo celeste "${name}" no pudo ser encontrado en los catálogos astronómicos (CDS Sesame / SIMBAD). Verifica el nombre e inténtalo nuevamente.`,
+      invalidCoordsTitle: "Coordenadas no válidas",
+      invalidCoordsMessage: (coords) =>
+        `Las coordenadas proporcionadas en el enlace${coords ? ` ("${coords}")` : ""} no son válidas. Usa un formato válido para RA (0–360° o HMS) y Dec (-90° a +90° o DMS).`,
+      dismissButton: "Entendido",
     },
     presets: [
       {
@@ -926,6 +942,15 @@ export const translations: Record<Language, Translations> = {
         nh3: "Ammonia / Cyanate",
         pahs: "PAHs",
       },
+    },
+    urlError: {
+      invalidTargetTitle: "Invalid Celestial Body",
+      invalidTargetMessage: (name) =>
+        `The celestial body "${name}" could not be found in astronomical catalogs (CDS Sesame / SIMBAD). Please check the name and try again.`,
+      invalidCoordsTitle: "Invalid Coordinates",
+      invalidCoordsMessage: (coords) =>
+        `The coordinates provided in the link${coords ? ` ("${coords}")` : ""} are not valid. Please use a valid format for RA (0–360° or HMS) and Dec (-90° to +90° or DMS).`,
+      dismissButton: "Got it",
     },
     presets: [
       {

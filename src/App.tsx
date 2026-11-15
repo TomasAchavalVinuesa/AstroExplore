@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { AlertTriangle, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import {
   ControlsPanel,
   type MoleculeSignature,
@@ -11,6 +11,7 @@ import { parseDec, parseRA } from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
 import { SPHEREX_HIPS_WAVELENGTHS_UM } from "./lib/hips";
 import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
+import { clearUrlState, parseUrlState, syncUrlState } from "./lib/urlState";
 import { useLanguage } from "./i18n/LanguageContext";
 import type { Translations } from "./i18n/translations";
 import type {
@@ -102,6 +103,13 @@ export default function App() {
     dec: -7.24515,
     size: 0.12,
   });
+  const [activeUrlCoords, setActiveUrlCoords] = useState<{ ra: string; dec: string } | null>(null);
+  const [urlBootstrapDone, setUrlBootstrapDone] = useState(false);
+  const urlInitializedRef = useRef(false);
+  const [urlErrorModal, setUrlErrorModal] = useState<{
+    kind: "invalidTarget" | "invalidCoords";
+    value: string;
+  } | null>(null);
 
   // Draw background galaxy & hero card starfield (from chrono_spherex_app.html)
   useEffect(() => {
@@ -305,6 +313,7 @@ export default function App() {
         return;
       }
 
+      setActiveUrlCoords({ ra: rawRa.trim(), dec: rawDec.trim() });
       setLoading(true);
       setStatusState({
         type: "queryingSia",
@@ -384,42 +393,216 @@ export default function App() {
     return () => controller.abort();
   }, [cutoutLoading, cutout, lastCoords, observations, selectedIdx]);
 
-  // Permalinks: Parse URL parameters on initial load
+  // URL State: Parse URL parameters on initial load (supports ?ra=&dec= and ?target=)
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const urlRa = params.get("ra");
-    const urlDec = params.get("dec");
-    const urlCol = params.get("collection") as CollectionQueryMode | null;
-    const urlBand = params.get("band");
-    const urlSize = params.get("size");
-    const urlStretch = params.get("stretch") as StretchMode | null;
-    const urlCmap = params.get("colormap") as ColormapName | null;
-    const urlZodi = params.get("subtract_zodi");
+    if (typeof window === "undefined" || urlInitializedRef.current) return;
+    urlInitializedRef.current = true;
 
-    if (urlRa && urlDec) {
-      setRaInput(urlRa);
-      setDecInput(urlDec);
-      if (urlCol) setCollectionMode(urlCol);
-      if (urlBand) setBand(urlBand);
-      if (urlSize) setSize(urlSize);
-      if (urlStretch) setStretch(urlStretch);
-      if (urlCmap) setColormap(urlCmap);
-      if (urlZodi !== null) setSubtractZodi(urlZodi === "true");
+    const parsed = parseUrlState(window.location.search);
 
+    if (parsed.kind === "none") {
+      setUrlBootstrapDone(true);
+      return;
+    }
+
+    if (parsed.kind === "invalidCoords") {
+      clearUrlState();
+      setCurrentScreen("entry");
+      setUrlErrorModal({ kind: "invalidCoords", value: parsed.rawCoords });
+      setUrlBootstrapDone(true);
+      return;
+    }
+
+    const effectiveBand = parsed.options.band ?? band;
+    const effectiveSize = parsed.options.size ?? size;
+    const effectiveStretch = parsed.options.stretch ?? stretch;
+    const effectiveCmap = parsed.options.colormap ?? colormap;
+    const effectiveZodi = parsed.options.subtractZodi ?? subtractZodi;
+
+    if (parsed.options.band) setBand(parsed.options.band);
+    if (parsed.options.size) setSize(parsed.options.size);
+    if (parsed.options.stretch) setStretch(parsed.options.stretch);
+    if (parsed.options.colormap) setColormap(parsed.options.colormap);
+    if (parsed.options.subtractZodi !== undefined) setSubtractZodi(parsed.options.subtractZodi);
+
+    if (parsed.kind === "coords") {
+      const effectiveCol = parsed.options.collection ?? collectionMode;
+      if (parsed.options.collection) setCollectionMode(parsed.options.collection);
+
+      setRaInput(parsed.ra);
+      setDecInput(parsed.dec);
+      setActivePresetId(null);
+      setResolvedObject(null);
+      setTargetName(t.chrono.customSkyPatch);
+      setActiveUrlCoords({ ra: parsed.ra, dec: parsed.dec });
       setCurrentScreen("explorer");
       setSecondMapOpen(true);
+      setUrlBootstrapDone(true);
 
       void executeSearch(
-        urlRa,
-        urlDec,
-        urlCol || "spherex_dr1",
-        urlBand || "all",
+        parsed.ra,
+        parsed.dec,
+        effectiveCol,
+        effectiveBand,
         radius,
-        urlSize || size
+        effectiveSize
       );
+      return;
     }
-  }, [executeSearch, radius, size]);
+
+    // parsed.kind === "target"
+    if (!parsed.target) {
+      clearUrlState();
+      setCurrentScreen("entry");
+      setUrlErrorModal({ kind: "invalidTarget", value: "" });
+      setUrlBootstrapDone(true);
+      return;
+    }
+
+    setCurrentScreen("loading");
+    setLoadingProgress(35);
+
+    const resolveInitialTarget = async () => {
+      const matchingPreset = t.presets.find(
+        (p) =>
+          p.label.toLowerCase() === parsed.target.toLowerCase() ||
+          p.queryName.toLowerCase() === parsed.target.toLowerCase()
+      );
+
+      if (matchingPreset) {
+        const effectiveCol = parsed.options.collection ?? matchingPreset.collection;
+        setActivePresetId(matchingPreset.id);
+        setTargetName(matchingPreset.label);
+        setRaInput(matchingPreset.ra);
+        setDecInput(matchingPreset.dec);
+        setCollectionMode(effectiveCol);
+        setActiveUrlCoords({ ra: matchingPreset.ra, dec: matchingPreset.dec });
+
+        syncUrlState({
+          ra: matchingPreset.ra,
+          dec: matchingPreset.dec,
+          collection: effectiveCol,
+          band: effectiveBand,
+          size: effectiveSize,
+          stretch: effectiveStretch,
+          colormap: effectiveCmap,
+          subtractZodi: effectiveZodi,
+        });
+
+        try {
+          const resolved = await resolveCelestialName(matchingPreset.queryName);
+          setResolvedObject(resolved);
+        } catch {
+          setResolvedObject(null);
+        }
+
+        setLoadingProgress(100);
+        setCurrentScreen("explorer");
+        setSecondMapOpen(true);
+        setUrlBootstrapDone(true);
+        await executeSearch(
+          matchingPreset.ra,
+          matchingPreset.dec,
+          effectiveCol,
+          effectiveBand,
+          radius,
+          effectiveSize
+        );
+        return;
+      }
+
+      try {
+        const resolved = await resolveCelestialName(parsed.target);
+        const effectiveCol = parsed.options.collection ?? "spherex_dr1";
+        setActivePresetId(null);
+        setResolvedObject(resolved);
+        setTargetName(resolved.canonicalName);
+        setRaInput(resolved.raHms);
+        setDecInput(resolved.decDms);
+        setCollectionMode(effectiveCol);
+        setActiveUrlCoords({ ra: resolved.raHms, dec: resolved.decDms });
+
+        syncUrlState({
+          ra: resolved.raHms,
+          dec: resolved.decDms,
+          collection: effectiveCol,
+          band: effectiveBand,
+          size: effectiveSize,
+          stretch: effectiveStretch,
+          colormap: effectiveCmap,
+          subtractZodi: effectiveZodi,
+        });
+
+        setLoadingProgress(100);
+        setCurrentScreen("explorer");
+        setSecondMapOpen(true);
+        setUrlBootstrapDone(true);
+        await executeSearch(
+          resolved.raHms,
+          resolved.decDms,
+          effectiveCol,
+          effectiveBand,
+          radius,
+          effectiveSize
+        );
+      } catch {
+        clearUrlState();
+        setCurrentScreen("entry");
+        setUrlErrorModal({ kind: "invalidTarget", value: parsed.target });
+        setUrlBootstrapDone(true);
+      }
+    };
+
+    void resolveInitialTarget();
+  }, [
+    band,
+    collectionMode,
+    colormap,
+    executeSearch,
+    radius,
+    size,
+    stretch,
+    subtractZodi,
+    t.chrono.customSkyPatch,
+    t.presets,
+  ]);
+
+  // URL State: Keep browser URL synced with active explorer coordinates & display settings
+  useEffect(() => {
+    if (!urlBootstrapDone || currentScreen !== "explorer" || !activeUrlCoords) return;
+    syncUrlState({
+      ra: activeUrlCoords.ra,
+      dec: activeUrlCoords.dec,
+      collection: collectionMode,
+      band,
+      size,
+      stretch,
+      colormap,
+      subtractZodi,
+    });
+  }, [
+    urlBootstrapDone,
+    currentScreen,
+    activeUrlCoords,
+    collectionMode,
+    band,
+    size,
+    stretch,
+    colormap,
+    subtractZodi,
+  ]);
+
+  // Dismiss URL validation modal with Escape
+  useEffect(() => {
+    if (!urlErrorModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setUrlErrorModal(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [urlErrorModal]);
 
   // Launch from Screen 1 (Entry) -> Screen 2 (Loading) -> Screen 3 (Explorer)
   const launchExplorer = useCallback(async () => {
@@ -587,7 +770,9 @@ export default function App() {
       setActiveCollection(col);
       const colObs = versions?.[col]?.observations ?? [];
       const foundIdx = colObs.findIndex(
-        (o) => o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass
+        (o) =>
+          (o.access_url && targetObs.access_url && o.access_url === targetObs.access_url) ||
+          (o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass)
       );
       setSelectedIdx(foundIdx >= 0 ? foundIdx : 0);
     },
@@ -877,6 +1062,62 @@ export default function App() {
               activeCollection={activeCollection}
               onSelectCollection={handleSelectCollection}
             />
+          </div>
+        </div>
+      )}
+      {/* Invalid URL target / coordinates popup modal */}
+      {urlErrorModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="url-error-modal-title"
+          onClick={() => setUrlErrorModal(null)}
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="glass-panel relative w-full max-w-md rounded-2xl p-6 border border-rose-500/40 shadow-[0_0_40px_rgba(244,63,94,0.2)]"
+          >
+            <button
+              type="button"
+              onClick={() => setUrlErrorModal(null)}
+              aria-label={t.urlError.dismissButton}
+              className="btn-press absolute top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-start gap-4">
+              <div className="shrink-0 w-11 h-11 rounded-xl bg-rose-500/15 border border-rose-500/35 flex items-center justify-center text-rose-400">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+
+              <div className="flex-1 min-w-0 pr-4">
+                <h3
+                  id="url-error-modal-title"
+                  className="text-base font-semibold text-white mb-1.5"
+                >
+                  {urlErrorModal.kind === "invalidTarget"
+                    ? t.urlError.invalidTargetTitle
+                    : t.urlError.invalidCoordsTitle}
+                </h3>
+                <p className="text-sm text-slate-300 leading-relaxed break-words">
+                  {urlErrorModal.kind === "invalidTarget"
+                    ? t.urlError.invalidTargetMessage(urlErrorModal.value)
+                    : t.urlError.invalidCoordsMessage(urlErrorModal.value)}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setUrlErrorModal(null)}
+                className="btn-press px-5 py-2 rounded-xl bg-[#00D2FF]/15 border border-[#00D2FF]/60 text-[#00D2FF] text-sm font-medium hover:bg-[#00D2FF]/25 transition-colors cursor-pointer"
+              >
+                {t.urlError.dismissButton}
+              </button>
+            </div>
           </div>
         </div>
       )}

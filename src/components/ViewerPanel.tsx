@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Calendar,
@@ -62,6 +62,14 @@ const FALLBACK_EPOCHS = ["2025.5 (t₁)", "2026.0 (t₂)", "2026.5 (t₃)", "202
 
 const getEpochKey = (obs: SpherexObservation) => `${obs.obs_id}|${obs.bandpass}`;
 
+const isSameObs = (a: SpherexObservation | null | undefined, b: SpherexObservation | null | undefined) => {
+  if (!a || !b) return false;
+  return (
+    (Boolean(a.access_url) && Boolean(b.access_url) && a.access_url === b.access_url) ||
+    (a.obs_id === b.obs_id && a.bandpass === b.bandpass)
+  );
+};
+
 export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   selectedObs,
   cutout,
@@ -105,6 +113,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const [epochCutouts, setEpochCutouts] = useState<
     Record<string, { status: "loading" | "ready" | "error"; cutout?: RenderedCutout }>
   >({});
+  const epochCutoutsRef = useRef(epochCutouts);
+  epochCutoutsRef.current = epochCutouts;
 
   // 6-band representatives for Map 2 "Bands" tab
   const [bandCutouts, setBandCutouts] = useState<
@@ -244,27 +254,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     }
   }, [epochFrames.length, playbackFrames.length, isPlaying]);
 
-  // Keep selectedObs synced to an active playback frame when selection changes
-  useEffect(() => {
-    if (playbackFrames.length === 0 || !selectedObs) return;
-    const exists = playbackFrames.some(
-      (o) => o.obs_id === selectedObs.obs_id && o.bandpass === selectedObs.bandpass
-    );
-    if (!exists) {
-      onSelectVersionObservation(activeCollection, playbackFrames[0]);
-    }
-  }, [playbackFrames, selectedObs, activeCollection, onSelectVersionObservation]);
-
-  const activeEpochIdx = useMemo(() => {
-    if (epochFrames.length === 0) return fallbackEpochIdx;
-    if (playbackFrames.length === 0) return 0;
-    if (!selectedObs) return 0;
-    const idx = playbackFrames.findIndex(
-      (o) => o.obs_id === selectedObs.obs_id && o.bandpass === selectedObs.bandpass
-    );
-    return idx >= 0 ? idx : 0;
-  }, [epochFrames.length, playbackFrames, selectedObs, fallbackEpochIdx]);
-
   const renderSignature = useMemo(() => {
     if (!lastCoords) return "";
     return `${lastCoords.ra.toFixed(6)}|${lastCoords.dec.toFixed(6)}|${lastCoords.size}|${stretch}|${colormap}|${subtractZodi}`;
@@ -284,6 +273,10 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
     playbackFrames.forEach((obs, idx) => {
       const frameKey = `${renderSignature}|${getEpochKey(obs)}`;
+      if (epochCutoutsRef.current[frameKey]?.status === "ready") {
+        return;
+      }
+
       setEpochCutouts((prev) =>
         prev[frameKey]?.status === "ready"
           ? prev
@@ -340,23 +333,74 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const allPlaybackFramesSettled =
     playbackFrames.length > 0 && settledPlaybackCount === playbackFrames.length;
 
+  // Exclude any frames that failed to load once all selected frames have settled
+  const readyPlaybackFrames = useMemo(
+    () =>
+      playbackFrames.filter(
+        (obs) => epochCutouts[`${renderSignature}|${getEpochKey(obs)}`]?.status === "ready"
+      ),
+    [playbackFrames, epochCutouts, renderSignature]
+  );
+
+  const effectivePlaybackFrames = allPlaybackFramesSettled ? readyPlaybackFrames : playbackFrames;
+
+  // Keep selectedObs synced to an active (and valid) playback frame when selection or load state changes
+  useEffect(() => {
+    if (effectivePlaybackFrames.length === 0 || !selectedObs) return;
+    const exists = effectivePlaybackFrames.some((o) => isSameObs(o, selectedObs));
+    if (!exists) {
+      onSelectVersionObservation(activeCollection, effectivePlaybackFrames[0]);
+    }
+  }, [effectivePlaybackFrames, selectedObs, activeCollection, onSelectVersionObservation]);
+
+  const activeEpochIdx = useMemo(() => {
+    if (epochFrames.length === 0) return fallbackEpochIdx;
+    if (effectivePlaybackFrames.length === 0) return 0;
+    if (!selectedObs) return 0;
+    const idx = effectivePlaybackFrames.findIndex((o) => isSameObs(o, selectedObs));
+    return idx >= 0 ? idx : 0;
+  }, [epochFrames.length, effectivePlaybackFrames, selectedObs, fallbackEpochIdx]);
+
+  const canAutoplayCutout =
+    secondMapOpen &&
+    secondMapTab === "cutout" &&
+    allPlaybackFramesSettled &&
+    readyPlaybackFrames.length > 1;
+
+  const prevCanAutoplayRef = useRef<boolean>(false);
+
+  // Autoplay Map 2 epoch video once all selected playback frames finish loading
+  useEffect(() => {
+    if (canAutoplayCutout && !prevCanAutoplayRef.current) {
+      setIsPlaying(true);
+    }
+    prevCanAutoplayRef.current = canAutoplayCutout;
+  }, [canAutoplayCutout]);
+
   const isPreloadingAll =
     epochFrames.length > 0 && playbackFrames.length > 0 && !allPlaybackFramesSettled;
 
   const isWaitingForSelectedDates = epochFrames.length > 0 && playbackFrames.length === 0;
 
-  const activePlaybackObs = playbackFrames[activeEpochIdx] ?? playbackFrames[0] ?? null;
+  const activePlaybackObs =
+    effectivePlaybackFrames[activeEpochIdx] ?? effectivePlaybackFrames[0] ?? null;
   const activePreloadedCutout = activePlaybackObs
     ? epochCutouts[`${renderSignature}|${getEpochKey(activePlaybackObs)}`]?.cutout ?? null
     : null;
 
   const displayCutout = useMemo(() => {
     if (epochFrames.length > 0) {
-      if (!allPlaybackFramesSettled) return null;
+      if (!allPlaybackFramesSettled || readyPlaybackFrames.length === 0) return null;
       return activePreloadedCutout ?? cutout;
     }
     return cutout;
-  }, [epochFrames.length, allPlaybackFramesSettled, activePreloadedCutout, cutout]);
+  }, [
+    epochFrames.length,
+    allPlaybackFramesSettled,
+    readyPlaybackFrames.length,
+    activePreloadedCutout,
+    cutout,
+  ]);
 
   // Smooth crossfade tracking for Map 2
   useEffect(() => {
@@ -375,14 +419,14 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   // Automatic epoch playback interval (only advances once all selected frames are cached)
   useEffect(() => {
     if (!isPlaying) return;
-    if (epochFrames.length > 0 && (!allPlaybackFramesSettled || playbackFrames.length <= 1)) {
+    if (epochFrames.length > 0 && (!allPlaybackFramesSettled || readyPlaybackFrames.length <= 1)) {
       return;
     }
     const intervalMs = Math.max(250, Math.round(950 / speedMultiplier));
     const timer = window.setInterval(() => {
-      if (playbackFrames.length > 1) {
-        const nextIdx = (activeEpochIdx + 1) % playbackFrames.length;
-        onSelectVersionObservation(activeCollection, playbackFrames[nextIdx]);
+      if (readyPlaybackFrames.length > 1) {
+        const nextIdx = (activeEpochIdx + 1) % readyPlaybackFrames.length;
+        onSelectVersionObservation(activeCollection, readyPlaybackFrames[nextIdx]);
       } else if (epochFrames.length === 0) {
         setFallbackEpochIdx((prev) => (prev + 1) % FALLBACK_EPOCHS.length);
       }
@@ -393,7 +437,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     isPlaying,
     speedMultiplier,
     epochFrames.length,
-    playbackFrames,
+    readyPlaybackFrames,
     allPlaybackFramesSettled,
     activeEpochIdx,
     activeCollection,
@@ -522,8 +566,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   };
 
   const currentDatePillLabel = useMemo(() => {
-    if (playbackFrames.length > 0) {
-      const current = playbackFrames[activeEpochIdx] ?? playbackFrames[0];
+    if (effectivePlaybackFrames.length > 0) {
+      const current = effectivePlaybackFrames[activeEpochIdx] ?? effectivePlaybackFrames[0];
       return current.epoch_date ?? current.obs_id;
     }
     if (epochFrames.length > 0) {
@@ -533,23 +577,23 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       return selectedObs.epoch_date;
     }
     return FALLBACK_EPOCHS[fallbackEpochIdx] ?? t.chrono.noDateLabel;
-  }, [playbackFrames, activeEpochIdx, epochFrames.length, selectedObs?.epoch_date, fallbackEpochIdx, t.chrono.noDateLabel]);
+  }, [effectivePlaybackFrames, activeEpochIdx, epochFrames.length, selectedObs?.epoch_date, fallbackEpochIdx, t.chrono.noDateLabel]);
 
   const epochReadoutText = useMemo(() => {
-    if (playbackFrames.length > 0) {
-      const current = playbackFrames[activeEpochIdx] ?? playbackFrames[0];
+    if (effectivePlaybackFrames.length > 0) {
+      const current = effectivePlaybackFrames[activeEpochIdx] ?? effectivePlaybackFrames[0];
       const dateStr = current.epoch_date ?? current.bandpass ?? "SPHEREx";
-      return `${dateStr} (t${activeEpochIdx + 1}/${playbackFrames.length})`;
+      return `${dateStr} (t${activeEpochIdx + 1}/${effectivePlaybackFrames.length})`;
     }
     if (epochFrames.length > 0) {
       return `0/${epochFrames.length}`;
     }
     return FALLBACK_EPOCHS[fallbackEpochIdx] ?? FALLBACK_EPOCHS[0];
-  }, [playbackFrames, epochFrames.length, activeEpochIdx, fallbackEpochIdx]);
+  }, [effectivePlaybackFrames, epochFrames.length, activeEpochIdx, fallbackEpochIdx]);
 
   const maxEpochSlider = Math.max(
     1,
-    (epochFrames.length > 0 ? Math.max(1, playbackFrames.length) : FALLBACK_EPOCHS.length) - 1
+    (epochFrames.length > 0 ? Math.max(1, effectivePlaybackFrames.length) : FALLBACK_EPOCHS.length) - 1
   );
 
   return (
@@ -563,11 +607,13 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* VIEWPORT AREA: 1 Map (Full Width) or Divided in 2 Maps (50% / 50%)    */}
+      {/* VIEWPORT AREA: 1 Map (Full Width) or Compact Map 1 + Dominant Map 2   */}
       {/* ===================================================================== */}
       <div
         className={`flex-1 min-h-0 grid gap-4 transition-all duration-300 ${
-          secondMapOpen ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+          secondMapOpen
+            ? "grid-cols-1 grid-rows-[200px_1fr] lg:grid-rows-1 lg:grid-cols-[270px_1fr] xl:grid-cols-[300px_1fr]"
+            : "grid-cols-1"
         }`}
       >
         {/* MAP 1: Interactive HiPS / MOC Sky Viewport */}
@@ -655,9 +701,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                       epochFrames.map((obs) => {
                         const key = getEpochKey(obs);
                         const isChecked = selectedEpochKeys.has(key);
-                        const isCurrent =
-                          selectedObs?.obs_id === obs.obs_id &&
-                          selectedObs?.bandpass === obs.bandpass;
+                        const isCurrent = isSameObs(selectedObs, obs);
                         const frameStatus = epochCutouts[`${renderSignature}|${key}`]?.status;
 
                         return (
@@ -967,8 +1011,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 {bandRepresentatives.map((obs) => {
                   const key = `${obs.bandpass}|${obs.obs_id}`;
                   const entry = bandCutouts[key];
-                  const isCurrent =
-                    selectedObs?.obs_id === obs.obs_id && selectedObs?.bandpass === obs.bandpass;
+                  const isCurrent = isSameObs(selectedObs, obs);
                   return (
                     <button
                       key={key}
@@ -1100,8 +1143,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 if (!secondMapOpen) {
                   onToggleSecondMap(true);
                 }
-                if (playbackFrames.length > 0 && playbackFrames[idx]) {
-                  onSelectVersionObservation(activeCollection, playbackFrames[idx]);
+                if (effectivePlaybackFrames.length > 0 && effectivePlaybackFrames[idx]) {
+                  onSelectVersionObservation(activeCollection, effectivePlaybackFrames[idx]);
                 } else if (epochFrames.length === 0) {
                   setFallbackEpochIdx(idx);
                 }

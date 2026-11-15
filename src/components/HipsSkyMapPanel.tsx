@@ -64,6 +64,32 @@ function wrapRaDeltaDeg(dRa: number): number {
   return ((dRa + 540) % 360) - 180;
 }
 
+function computeFitsBoundsFov(
+  center: { ra: number; dec: number },
+  observations: SpherexObservation[],
+  cutoutSizeDeg?: number
+): number {
+  const cosDec = Math.max(0.15, Math.cos(center.dec * DEG2RAD));
+  let maxHalfSpan = 0;
+  const maxFootprints = Math.min(observations.length, 60);
+
+  for (let i = 0; i < maxFootprints; i++) {
+    const poly = parseSRegionPolygon(observations[i].s_region);
+    if (poly.length < 3) continue;
+    for (const v of poly) {
+      const dRa = Math.abs(wrapRaDeltaDeg(v.ra - center.ra)) * cosDec;
+      const dDec = Math.abs(v.dec - center.dec);
+      if (dRa > maxHalfSpan) maxHalfSpan = dRa;
+      if (dDec > maxHalfSpan) maxHalfSpan = dDec;
+    }
+  }
+
+  if (maxHalfSpan > 0) {
+    return Math.max(1.5, Math.min(35, Number((maxHalfSpan * 2 * 1.2).toFixed(2))));
+  }
+  return Math.max(2.5, Math.min(12, Number(((cutoutSizeDeg ?? 0.15) * 25).toFixed(2))));
+}
+
 function getAitoffScale(width: number, height: number, fovDeg: number): number {
   const baseScale = Math.min(
     (width * 0.92) / (4 * Math.SQRT2),
@@ -387,8 +413,8 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
     const updateDimensions = () => {
       const rect = el.getBoundingClientRect();
-      const w = Math.max(280, Math.floor(rect.width));
-      const h = Math.max(240, Math.floor(rect.height));
+      const w = Math.max(120, Math.floor(rect.width));
+      const h = Math.max(120, Math.floor(rect.height));
       setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
     };
 
@@ -403,6 +429,26 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     if (!targetCoords) return;
     setViewCenter({ ra: targetCoords.ra, dec: targetCoords.dec });
   }, [targetCoords?.ra, targetCoords?.dec]);
+
+  // Al abrir el Mapa 2, encuadrar el Mapa 1 solo en las secciones FITS del punto mostrado; al cerrar, restaurar FOV
+  const prevFovRef = useRef<number>(35);
+  const wasSecondMapOpenRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (secondMapOpen) {
+      if (!wasSecondMapOpenRef.current) {
+        prevFovRef.current = fovDeg;
+        wasSecondMapOpenRef.current = true;
+        setShowFootprints(true);
+      }
+      const center = targetCoords ?? markedPoint ?? viewCenter;
+      setViewCenter({ ra: center.ra, dec: center.dec });
+      setFovDeg(computeFitsBoundsFov(center, observations, targetCoords?.size));
+    } else if (wasSecondMapOpenRef.current) {
+      wasSecondMapOpenRef.current = false;
+      setFovDeg(prevFovRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secondMapOpen, observations, targetCoords?.ra, targetCoords?.dec, targetCoords?.size]);
 
   // Cargar MOC de SPHEREx cuando se activa una capa MOC
   useEffect(() => {
@@ -806,20 +852,19 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     if (showFootprints && observations.length > 0) {
       ctx.save();
       const maxFootprints = Math.min(observations.length, 60);
+      const isSameObs = (a: SpherexObservation, b: SpherexObservation) =>
+        (a.access_url && b.access_url && a.access_url === b.access_url) ||
+        (a.obs_id === b.obs_id && a.bandpass === b.bandpass);
 
-      for (let i = 0; i < maxFootprints; i++) {
-        const obs = observations[i];
+      const drawFootprint = (obs: SpherexObservation, isSelected: boolean) => {
         const poly = parseSRegionPolygon(obs.s_region);
-        if (poly.length < 3) continue;
-
-        const isSelected =
-          selectedObs?.obs_id === obs.obs_id && selectedObs?.bandpass === obs.bandpass;
+        if (poly.length < 3) return;
 
         const pts = poly.map((v) => projectSky(v.ra, v.dec));
-        if (!isAitoff && pts.some((p) => p.cosC <= 0.05)) continue;
+        if (!isAitoff && pts.some((p) => p.cosC <= 0.05)) return;
         if (isAitoff) {
           const lons = poly.map((v) => rotateToAitoffLonLat(v.ra, v.dec, ra0, dec0).lonDeg);
-          if (Math.max(...lons) - Math.min(...lons) > 180) continue;
+          if (Math.max(...lons) - Math.min(...lons) > 180) return;
         }
 
         ctx.beginPath();
@@ -830,16 +875,31 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         ctx.closePath();
 
         if (isSelected) {
-          ctx.strokeStyle = "rgba(0, 210, 255, 0.95)";
-          ctx.fillStyle = "rgba(0, 210, 255, 0.14)";
-          ctx.lineWidth = 2;
+          ctx.save();
+          ctx.shadowColor = "#00D2FF";
+          ctx.shadowBlur = 8;
+          ctx.strokeStyle = "#00D2FF";
+          ctx.fillStyle = "rgba(0, 210, 255, 0.16)";
+          ctx.lineWidth = 2.5;
           ctx.fill();
           ctx.stroke();
+          ctx.restore();
         } else {
           ctx.strokeStyle = "rgba(251, 191, 36, 0.30)";
           ctx.lineWidth = 1;
           ctx.stroke();
         }
+      };
+
+      for (let i = 0; i < maxFootprints; i++) {
+        const obs = observations[i];
+        if (selectedObs && isSameObs(obs, selectedObs)) continue;
+        drawFootprint(obs, false);
+      }
+
+      // Always draw the active/selected FITS footprint on top, even if its index >= 60
+      if (selectedObs) {
+        drawFootprint(selectedObs, true);
       }
       ctx.restore();
     }
@@ -1048,7 +1108,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       e.stopPropagation();
       if (e.deltaY === 0) return;
       const factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-      setFovDeg((prev) => Number(Math.max(2, Math.min(MAX_FOV_DEG, prev * factor)).toFixed(2)));
+      setFovDeg((prev) => Number(Math.max(1.5, Math.min(MAX_FOV_DEG, prev * factor)).toFixed(2)));
     };
 
     el.addEventListener("wheel", onNativeWheel, { passive: false });
@@ -1106,7 +1166,9 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
   return (
     <div
       ref={mapViewportRef}
-      className="relative w-full h-full min-h-[280px] rounded-[22px] overflow-hidden border border-white/15 bg-black shadow-2xl select-none overscroll-none"
+      className={`relative w-full h-full rounded-[22px] overflow-hidden border border-white/15 bg-black shadow-2xl select-none overscroll-none ${
+        secondMapOpen ? "min-h-0" : "min-h-[280px]"
+      }`}
     >
       <canvas
         ref={canvasRef}
@@ -1120,203 +1182,284 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
       />
 
-      {/* Top-Left Coordinates Pill (Exact CHRONO-SPHEREx style) */}
-      <div className="glass-panel absolute top-4 left-4 rounded-full px-4 py-1.5 flex items-center gap-2.5 text-xs font-mono text-slate-100 pointer-events-none max-w-[65%] truncate">
-        <span className="w-2 h-2 rounded-full bg-[#00D2FF] shadow-[0_0_8px_#00D2FF] shrink-0" />
-        <span className="truncate">
-          RA {formatRAtoHMS(readoutRa)} · Dec {formatDectoDMS(readoutDec)}
-        </span>
-      </div>
-
-      {/* Top-Right Target Badge + Map Controls */}
-      <div className="absolute top-4 right-4 flex items-center gap-2 flex-wrap justify-end max-w-[65%]">
-        <div className="glass-panel rounded-full px-3.5 py-1.5 text-xs text-slate-200 font-medium flex items-center gap-2">
-          {loadingMoc && <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF]" />}
-          <span className="truncate max-w-[160px]">{targetName}</span>
-          <span className="text-[10px] font-mono text-[#00D2FF]">
-            {fovDeg >= AITOFF_THRESHOLD_FOV ? "AIT · " : ""}FOV {fovDeg.toFixed(0)}°
-          </span>
-        </div>
-
-        {/* Toggle 2nd Map Split Button */}
-        {onToggleSecondMap && (
-          <button
-            type="button"
-            onClick={() => onToggleSecondMap(!secondMapOpen)}
-            className={`btn-press glass-panel rounded-full px-3.5 py-1.5 text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors ${
-              secondMapOpen
-                ? "border-[#00D2FF]/70 text-[#00D2FF] bg-[#00D2FF]/15"
-                : "text-slate-200 hover:text-white"
-            }`}
-            title={
-              secondMapOpen ? t.chrono.closeSecondMapButton : t.chrono.splitSecondMapButton
-            }
-          >
-            <Columns2 className="w-3.5 h-3.5 text-[#00D2FF]" />
-            <span className="hidden sm:inline">
-              {secondMapOpen ? t.chrono.closeSecondMapButton : t.chrono.splitSecondMapButton}
-            </span>
-          </button>
-        )}
-      </div>
-
-      {/* Bottom-Left Layer & Zoom Pill Controls */}
-      <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] pointer-events-auto flex-wrap">
-          <button
-            type="button"
-            onClick={() => setShowMocDeep((v) => !v)}
-            className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-              showMocDeep ? "bg-purple-500/30 text-purple-200" : "text-slate-400 hover:text-white"
-            }`}
-            title={t.skyMap.mocDeepLabel}
-          >
-            <Layers className="w-3 h-3" />
-            <span>Deep</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowMocWide((v) => !v)}
-            className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-              showMocWide ? "bg-sky-500/30 text-sky-200" : "text-slate-400 hover:text-white"
-            }`}
-            title={t.skyMap.mocWideLabel}
-          >
-            <Layers className="w-3 h-3" />
-            <span>Wide</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowFootprints((v) => !v)}
-            className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-              showFootprints
-                ? "bg-amber-500/30 text-amber-200"
-                : "text-slate-400 hover:text-white"
-            }`}
-            title={t.skyMap.footprintsLabel}
-          >
-            <Compass className="w-3 h-3" />
-            <span>FITS</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowGrid((v) => !v)}
-            className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
-              showGrid ? "bg-[#00D2FF]/25 text-[#00D2FF]" : "text-slate-400 hover:text-white"
-            }`}
-            title={t.skyMap.gridLabel}
-          >
-            <Grid className="w-3 h-3" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowChannelBar((v) => !v)}
-            className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 font-mono ${
-              showChannelBar
-                ? "bg-[#00D2FF]/25 text-[#00D2FF]"
-                : "text-slate-300 hover:text-white"
-            }`}
-            title={t.skyMap.channelLabel}
-          >
-            <SlidersHorizontal className="w-3 h-3 text-[#00D2FF]" />
-            <span>{currentWavelengthUm.toFixed(2)}µm</span>
-          </button>
-        </div>
-
-        {/* Right Floating Zoom & Pin Pill */}
-        <div className="flex items-center gap-2 pointer-events-auto">
-          {markedPoint && (
-            <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] font-mono text-amber-200">
-              <MapPin className="w-3 h-3 text-amber-400 shrink-0" />
-              <span className="hidden md:inline">
-                {markedPoint.ra.toFixed(2)}°, {markedPoint.dec.toFixed(2)}°
+      {secondMapOpen ? (
+        <>
+          {/* Compact Top Bar when Map 2 is dominant */}
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none">
+            <div className="glass-panel rounded-full px-2.5 py-1 flex items-center gap-1.5 text-[11px] font-mono text-slate-200 min-w-0 pointer-events-auto">
+              <span className="w-2 h-2 rounded-full bg-[#00D2FF] shadow-[0_0_8px_#00D2FF] shrink-0" />
+              <span className="truncate">{targetName}</span>
+              <span className="text-[10px] text-[#00D2FF] shrink-0">
+                {fovDeg.toFixed(1)}°
               </span>
+            </div>
+
+            {onToggleSecondMap && (
               <button
                 type="button"
-                onClick={() => setMarkedPoint(null)}
-                className="hover:text-white cursor-pointer"
-                title={t.skyMap.clearPinAction}
+                onClick={() => onToggleSecondMap(false)}
+                className="btn-press glass-panel rounded-full p-1.5 text-xs font-medium border-[#00D2FF]/70 text-[#00D2FF] bg-[#00D2FF]/15 hover:text-white cursor-pointer transition-colors pointer-events-auto shrink-0"
+                title={t.chrono.closeSecondMapButton}
+                aria-label={t.chrono.closeSecondMapButton}
               >
-                <X className="w-3 h-3" />
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Compact Bottom Bar: FITS sections & Zoom/Refit */}
+          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-1.5 pointer-events-none">
+            <div className="glass-panel rounded-full px-2 py-1 flex items-center gap-1 text-[10px] pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => setShowFootprints((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
+                  showFootprints
+                    ? "bg-amber-500/30 text-amber-200"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.footprintsLabel}
+              >
+                <Compass className="w-3 h-3" />
+                <span>FITS</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowGrid((v) => !v)}
+                className={`btn-press p-1 rounded-full transition-colors cursor-pointer ${
+                  showGrid ? "bg-[#00D2FF]/25 text-[#00D2FF]" : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.gridLabel}
+              >
+                <Grid className="w-3 h-3" />
               </button>
             </div>
-          )}
 
-          {onQueryAtCoords && (
-            <button
-              type="button"
-              onClick={() => {
-                onToggleSecondMap?.(true);
-                onQueryAtCoords(viewCenter.ra, viewCenter.dec);
-              }}
-              className="btn-press glass-panel rounded-full px-3 py-1.5 text-[11px] font-medium text-[#00D2FF] hover:text-white flex items-center gap-1.5 cursor-pointer"
-              title={t.skyMap.searchHereButton}
-            >
-              <Search className="w-3 h-3" />
-              <span className="hidden sm:inline">{t.skyMap.searchHereButton}</span>
-            </button>
-          )}
-
-          <div className="glass-panel rounded-full px-2.5 py-1 flex items-center gap-1 text-xs text-slate-300">
-            <button
-              type="button"
-              onClick={() => setFovDeg((f) => Math.max(2, Number((f * 0.7).toFixed(2))))}
-              className="p-1 hover:text-white cursor-pointer"
-              title={t.viewer.zoomInTitle}
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setFovDeg((f) => Math.min(MAX_FOV_DEG, Number((f / 0.7).toFixed(2))))}
-              className="p-1 hover:text-white cursor-pointer"
-              title={t.viewer.zoomOutTitle}
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setViewCenter((v) => ({ ra: v.ra, dec: 0 }));
-                setFovDeg(MAX_FOV_DEG);
-              }}
-              className={`p-1 border-l border-white/10 pl-1.5 cursor-pointer ${
-                fovDeg >= AITOFF_THRESHOLD_FOV
-                  ? "text-[#00D2FF]"
-                  : "hover:text-[#00D2FF]"
-              }`}
-              title={t.skyMap.allSkyButton}
-            >
-              <Globe className="w-3.5 h-3.5" />
-            </button>
-            {targetCoords && (
+            <div className="glass-panel rounded-full px-2 py-1 flex items-center gap-0.5 text-xs text-slate-300 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => setFovDeg((f) => Math.max(1.5, Number((f * 0.7).toFixed(2))))}
+                className="p-1 hover:text-white cursor-pointer"
+                title={t.viewer.zoomInTitle}
+              >
+                <ZoomIn className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setFovDeg((f) => Math.min(MAX_FOV_DEG, Number((f / 0.7).toFixed(2))))}
+                className="p-1 hover:text-white cursor-pointer"
+                title={t.viewer.zoomOutTitle}
+              >
+                <ZoomOut className="w-3 h-3" />
+              </button>
               <button
                 type="button"
                 onClick={() => {
-                  setViewCenter({ ra: targetCoords.ra, dec: targetCoords.dec });
-                  setFovDeg(25);
+                  const center = targetCoords ?? markedPoint ?? viewCenter;
+                  setViewCenter({ ra: center.ra, dec: center.dec });
+                  setFovDeg(computeFitsBoundsFov(center, observations, targetCoords?.size));
                 }}
                 className="p-1 hover:text-[#00D2FF] border-l border-white/10 pl-1.5 cursor-pointer"
                 title={t.skyMap.centerOnTarget}
               >
-                <Crosshair className="w-3.5 h-3.5" />
+                <Crosshair className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Top-Left Coordinates Pill (Exact CHRONO-SPHEREx style) */}
+          <div className="glass-panel absolute top-4 left-4 rounded-full px-4 py-1.5 flex items-center gap-2.5 text-xs font-mono text-slate-100 pointer-events-none max-w-[65%] truncate">
+            <span className="w-2 h-2 rounded-full bg-[#00D2FF] shadow-[0_0_8px_#00D2FF] shrink-0" />
+            <span className="truncate">
+              RA {formatRAtoHMS(readoutRa)} · Dec {formatDectoDMS(readoutDec)}
+            </span>
+          </div>
+
+          {/* Top-Right Target Badge + Map Controls */}
+          <div className="absolute top-4 right-4 flex items-center gap-2 flex-wrap justify-end max-w-[65%]">
+            <div className="glass-panel rounded-full px-3.5 py-1.5 text-xs text-slate-200 font-medium flex items-center gap-2">
+              {loadingMoc && <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF]" />}
+              <span className="truncate max-w-[160px]">{targetName}</span>
+              <span className="text-[10px] font-mono text-[#00D2FF]">
+                {fovDeg >= AITOFF_THRESHOLD_FOV ? "AIT · " : ""}FOV {fovDeg.toFixed(0)}°
+              </span>
+            </div>
+
+            {/* Toggle 2nd Map Split Button */}
+            {onToggleSecondMap && (
+              <button
+                type="button"
+                onClick={() => onToggleSecondMap(!secondMapOpen)}
+                className="btn-press glass-panel rounded-full px-3.5 py-1.5 text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors text-slate-200 hover:text-white"
+                title={t.chrono.splitSecondMapButton}
+              >
+                <Columns2 className="w-3.5 h-3.5 text-[#00D2FF]" />
+                <span className="hidden sm:inline">{t.chrono.splitSecondMapButton}</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setFovDeg(35)}
-              className="p-1 hover:text-white border-l border-white/10 pl-1.5 cursor-pointer"
-              title={t.viewer.resetZoomTitle}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
           </div>
-        </div>
-      </div>
+
+          {/* Bottom-Left Layer & Zoom Pill Controls */}
+          <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+            <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] pointer-events-auto flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowMocDeep((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
+                  showMocDeep ? "bg-purple-500/30 text-purple-200" : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.mocDeepLabel}
+              >
+                <Layers className="w-3 h-3" />
+                <span>Deep</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowMocWide((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
+                  showMocWide ? "bg-sky-500/30 text-sky-200" : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.mocWideLabel}
+              >
+                <Layers className="w-3 h-3" />
+                <span>Wide</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowFootprints((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
+                  showFootprints
+                    ? "bg-amber-500/30 text-amber-200"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.footprintsLabel}
+              >
+                <Compass className="w-3 h-3" />
+                <span>FITS</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowGrid((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 ${
+                  showGrid ? "bg-[#00D2FF]/25 text-[#00D2FF]" : "text-slate-400 hover:text-white"
+                }`}
+                title={t.skyMap.gridLabel}
+              >
+                <Grid className="w-3 h-3" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowChannelBar((v) => !v)}
+                className={`btn-press px-2 py-0.5 rounded-full transition-colors cursor-pointer flex items-center gap-1 font-mono ${
+                  showChannelBar
+                    ? "bg-[#00D2FF]/25 text-[#00D2FF]"
+                    : "text-slate-300 hover:text-white"
+                }`}
+                title={t.skyMap.channelLabel}
+              >
+                <SlidersHorizontal className="w-3 h-3 text-[#00D2FF]" />
+                <span>{currentWavelengthUm.toFixed(2)}µm</span>
+              </button>
+            </div>
+
+            {/* Right Floating Zoom & Pin Pill */}
+            <div className="flex items-center gap-2 pointer-events-auto">
+              {markedPoint && (
+                <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] font-mono text-amber-200">
+                  <MapPin className="w-3 h-3 text-amber-400 shrink-0" />
+                  <span className="hidden md:inline">
+                    {markedPoint.ra.toFixed(2)}°, {markedPoint.dec.toFixed(2)}°
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMarkedPoint(null)}
+                    className="hover:text-white cursor-pointer"
+                    title={t.skyMap.clearPinAction}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+
+              {onQueryAtCoords && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleSecondMap?.(true);
+                    onQueryAtCoords(viewCenter.ra, viewCenter.dec);
+                  }}
+                  className="btn-press glass-panel rounded-full px-3 py-1.5 text-[11px] font-medium text-[#00D2FF] hover:text-white flex items-center gap-1.5 cursor-pointer"
+                  title={t.skyMap.searchHereButton}
+                >
+                  <Search className="w-3 h-3" />
+                  <span className="hidden sm:inline">{t.skyMap.searchHereButton}</span>
+                </button>
+              )}
+
+              <div className="glass-panel rounded-full px-2.5 py-1 flex items-center gap-1 text-xs text-slate-300">
+                <button
+                  type="button"
+                  onClick={() => setFovDeg((f) => Math.max(1.5, Number((f * 0.7).toFixed(2))))}
+                  className="p-1 hover:text-white cursor-pointer"
+                  title={t.viewer.zoomInTitle}
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFovDeg((f) => Math.min(MAX_FOV_DEG, Number((f / 0.7).toFixed(2))))}
+                  className="p-1 hover:text-white cursor-pointer"
+                  title={t.viewer.zoomOutTitle}
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewCenter((v) => ({ ra: v.ra, dec: 0 }));
+                    setFovDeg(MAX_FOV_DEG);
+                  }}
+                  className={`p-1 border-l border-white/10 pl-1.5 cursor-pointer ${
+                    fovDeg >= AITOFF_THRESHOLD_FOV
+                      ? "text-[#00D2FF]"
+                      : "hover:text-[#00D2FF]"
+                  }`}
+                  title={t.skyMap.allSkyButton}
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                </button>
+                {targetCoords && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewCenter({ ra: targetCoords.ra, dec: targetCoords.dec });
+                      setFovDeg(25);
+                    }}
+                    className="p-1 hover:text-[#00D2FF] border-l border-white/10 pl-1.5 cursor-pointer"
+                    title={t.skyMap.centerOnTarget}
+                  >
+                    <Crosshair className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setFovDeg(35)}
+                  className="p-1 hover:text-white border-l border-white/10 pl-1.5 cursor-pointer"
+                  title={t.viewer.resetZoomTitle}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Popover HiPS 102-Channel Spectral Slider */}
       {showChannelBar && (

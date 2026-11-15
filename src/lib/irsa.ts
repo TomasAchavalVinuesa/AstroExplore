@@ -17,8 +17,8 @@ const IRSA_ORIGIN = "https://irsa.ipac.caltech.edu";
 const FITS_CACHE_NAME = "spherex-fits-v1";
 const MAX_CONCURRENT_HIGH_DOWNLOADS = 2;
 const MAX_CONCURRENT_TOTAL_DOWNLOADS = 2;
-const SIA_TIMEOUT_MS = 35_000;
-const FITS_TIMEOUT_MS = 60_000;
+const SIA_TIMEOUT_MS = 60_000;
+const FITS_TIMEOUT_MS = 180_000;
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 
