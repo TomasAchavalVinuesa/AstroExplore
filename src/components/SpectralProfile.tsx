@@ -1,8 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { SpherexObservation } from "../lib/types";
 import { DETECTORS_METADATA, parseDetectorId } from "../lib/detectors";
 import { useLanguage } from "../i18n/LanguageContext";
-import { astroSonification } from "../lib/sonification";
 
 export interface SpectralPoint {
   obs_id: string;
@@ -48,66 +47,6 @@ export const SpectralProfile: React.FC<SpectralProfileProps> = ({
   const isEn = language === "en";
 
   const [hoveredPoint, setHoveredPoint] = useState<SpectralPoint | null>(null);
-
-  const [isSonifying, setIsSonifying] = useState(false);
-
-
-
-  useEffect(() => {
-
-    return () => {
-
-      astroSonification.stop();
-
-    };
-
-  }, []);
-
-
-
-  const handleToggleSonify = () => {
-
-    if (isSonifying) {
-
-      astroSonification.stop();
-
-      setIsSonifying(false);
-
-    } else {
-
-      setIsSonifying(true);
-
-      astroSonification.playSpectrumSweep(
-
-        validFluxPoints.map((p) => ({
-
-          wave_um: p.wave_um,
-
-          flux: p.flux,
-
-          bandpass: p.bandpass,
-
-          snr: p.snr,
-
-        })),
-
-        (idx, pt) => {
-
-          onSelectObsId(pt.bandpass);
-
-        },
-
-        () => {
-
-          setIsSonifying(false);
-
-        }
-
-      );
-
-    }
-
-  };
 
   // Build sorted data points for SED
   const points: SpectralPoint[] = useMemo(() => {
@@ -235,23 +174,6 @@ export const SpectralProfile: React.FC<SpectralProfileProps> = ({
               : isEn
                 ? "Scan Full Spectrum"
                 : "Escanear Todo el Espectro"}
-          </button>
-
-          <button
-            type="button"
-            className="btn-scan"
-            style={{
-              background: isSonifying ? "rgba(239, 68, 68, 0.25)" : "rgba(168, 85, 247, 0.25)",
-              borderColor: isSonifying ? "rgba(239, 68, 68, 0.5)" : "rgba(168, 85, 247, 0.5)",
-              color: isSonifying ? "#fca5a5" : "#d8b4fe",
-            }}
-            onClick={handleToggleSonify}
-            disabled={validFluxPoints.length === 0}
-            title={isEn ? "Astro-Sonification: Listen to infrared spectrum for accessibility" : "Astro-Sonificación: Escuchar espectro infrarrojo para accesibilidad visual"}
-          >
-            {isSonifying
-              ? isEn ? "Stop Audio" : "Detener Audio"
-              : isEn ? "Sonify SED" : "Sonificar SED"}
           </button>
         </div>
       </div>

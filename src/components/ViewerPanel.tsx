@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Calendar,
@@ -34,7 +34,6 @@ import { MultiVersionGallery } from "./MultiVersionGallery";
 import { DetectorGuide } from "./DetectorGuide";
 import { SpectralProfile } from "./SpectralProfile";
 import { BlinkComparator } from "./BlinkComparator";
-import { AstroChemistryLab, type MeasuredPoint } from "../features/chemistry";
 
 interface ViewerPanelProps {
   selectedObs: SpherexObservation | null;
@@ -88,7 +87,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const isEn = language === "en";
   const [cutoutZoom, setCutoutZoom] = useState<number>(1);
   const [secondMapTab, setSecondMapTab] = useState<
-    "cutout" | "bands" | "sed" | "blink" | "guide" | "chemistry"
+    "cutout" | "bands" | "sed" | "blink" | "guide"
   >("cutout");
   const [showGalleryModal, setShowGalleryModal] = useState<boolean>(false);
 
@@ -131,8 +130,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     return map;
   }, [cachedCutoutsMap]);
 
-
-
   const cachedFluxes = useMemo(() => {
     const map = new Map<string, { flux: number; unit: string; snr: number | null; mjd: number | null }>();
     cachedCutoutsMap.forEach((v, k) => {
@@ -143,34 +140,12 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
 
 
-
   const cutoutViewportRef = useRef<HTMLDivElement | null>(null);
 
   const observations = useMemo(
     () => versions?.[activeCollection]?.observations ?? [],
     [versions, activeCollection]
   );
-
-  const measuredChemistryPoints = useMemo(() => {
-    const list: MeasuredPoint[] = [];
-    for (const obs of observations) {
-      if (obs.em_min_um === null || obs.em_max_um === null) continue;
-      const wave = (obs.em_min_um + obs.em_max_um) / 2;
-      const key = `${obs.obs_id}|${obs.bandpass}`;
-      const cached = cachedCutoutsMap.get(key) || cachedCutoutsMap.get(obs.obs_id);
-      const flux = cached?.stats.median;
-      if (typeof flux === "number" && !isNaN(flux) && flux > 0) {
-        list.push({
-          wave_um: Number(wave.toFixed(3)),
-          flux,
-          snr: 10,
-          bandpass: obs.bandpass,
-          mjd: obs.t_min ?? null,
-        });
-      }
-    }
-    return list;
-  }, [observations, cachedCutoutsMap]);
 
   const selectedIdx = observations.findIndex(
     (o) => o.obs_id === selectedObs?.obs_id && o.bandpass === selectedObs?.bandpass
@@ -762,19 +737,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                   <Grid className="w-3 h-3" />
                   <span className="hidden sm:inline">D1–D6</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setSecondMapTab("chemistry")}
-                  className={`btn-press px-2.5 py-1 rounded-full cursor-pointer flex items-center gap-1 transition-colors ${
-                    secondMapTab === "chemistry"
-                      ? "bg-purple-500 text-white font-semibold"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                  title={isEn ? "Astrochemistry and Molecular Diagnostics" : "Astroquimica y Diagnostico Molecular"}
-                >
-                  <Sparkles className="w-3 h-3 text-purple-300" />
-                  <span className="hidden sm:inline">{isEn ? "Chemistry" : "Quimica"}</span>
-                </button>
               </div>
 
               {/* Close 2nd Map (Restores Map 1 to 100% Width) */}
@@ -1076,18 +1038,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                     if (target) onSelectVersionObservation(activeCollection, target);
                   }}
                   cachedImages={cachedImages}
-                />
-              </div>
-            ) : secondMapTab === "chemistry" ? (
-              <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto">
-                <AstroChemistryLab
-                  measuredPoints={measuredChemistryPoints}
-                  targetName={targetName}
-                  coordinates={{ ra: lastCoords?.ra ?? 0, dec: lastCoords?.dec ?? 0 }}
-                  onSelectBandpass={(bp) => {
-                    const target = observations.find((o) => o.bandpass === bp);
-                    if (target) onSelectVersionObservation(activeCollection, target);
-                  }}
                 />
               </div>
             ) : (
