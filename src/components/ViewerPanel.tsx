@@ -12,8 +12,6 @@ import {
   FileDown,
   FlaskConical,
   GitCompareArrows,
-  Grid,
-  Image as ImageIcon,
   Info,
   Loader2,
   Maximize2,
@@ -23,6 +21,7 @@ import {
   Orbit,
   Play,
   Plus,
+  Repeat,
   SkipBack,
   SkipForward,
   Sparkles,
@@ -78,6 +77,8 @@ interface ViewerPanelProps {
   onSelectMap2Tab: (tabId: string) => void;
   onCloseMap2Tab: (tabId: string) => void;
   onRenameMap2Tab?: (tabId: string, newLabel: string) => void;
+  galleryOpen?: boolean;
+  onCloseGallery?: () => void;
   selectedObs: SpherexObservation | null;
   cutout: RenderedCutout | null;
   cutoutLoading: boolean;
@@ -143,6 +144,8 @@ interface Map2TabPanelProps {
     scale: number,
     corners: Array<{ ra: number; dec: number }> | null
   ) => void;
+  galleryOpen?: boolean;
+  onCloseGallery?: () => void;
 }
 
 const FALLBACK_EPOCHS = ["2025.5 (t₁)", "2026.0 (t₂)", "2026.5 (t₃)", "2027.0 (t₄)"];
@@ -184,6 +187,8 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
   onChangeActiveTrajectory,
   playbackSlotEl,
   onSyncMap1Preview,
+  galleryOpen = false,
+  onCloseGallery,
 }) => {
   const { t, language } = useLanguage();
   const isEn = language === "en";
@@ -208,7 +213,6 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
   const [secondMapTab, setSecondMapTab] = useState<
     "cutout" | "bands" | "sed" | "blink" | "guide"
   >("cutout");
-  const [showGalleryModal, setShowGalleryModal] = useState<boolean>(false);
 
   const cutoutImageFrameRef = useRef<HTMLDivElement | null>(null);
   const cutoutDragRef = useRef<{
@@ -227,6 +231,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
 
   // Floating Epoch Playback Bar state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isLooping, setIsLooping] = useState<boolean>(false);
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(1.0);
   const [fallbackEpochIdx, setFallbackEpochIdx] = useState<number>(0);
   const [prevCutoutUrl, setPrevCutoutUrl] = useState<string | null>(null);
@@ -650,14 +655,22 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
       if (readyPlaybackFrames.length > 1) {
         const nextIdx = (activeEpochIdx + 1) % readyPlaybackFrames.length;
         onSelectVersionObservation(activeCollection, readyPlaybackFrames[nextIdx]);
+        if (!isLooping && nextIdx === 0) {
+          setIsPlaying(false);
+        }
       } else if (epochFrames.length === 0) {
-        setFallbackEpochIdx((prev) => (prev + 1) % FALLBACK_EPOCHS.length);
+        const nextIdx = (activeEpochIdx + 1) % FALLBACK_EPOCHS.length;
+        setFallbackEpochIdx(nextIdx);
+        if (!isLooping && nextIdx === 0) {
+          setIsPlaying(false);
+        }
       }
     }, intervalMs);
 
     return () => window.clearInterval(timer);
   }, [
     isPlaying,
+    isLooping,
     speedMultiplier,
     epochFrames.length,
     readyPlaybackFrames,
@@ -1165,6 +1178,22 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
         >
           <SkipForward className="w-3.5 h-3.5" />
         </button>
+
+        <button
+          type="button"
+          onClick={() => setIsLooping((v) => !v)}
+          aria-pressed={isLooping}
+          className={`btn-press h-8 px-2.5 rounded-full border flex items-center gap-1.5 text-xs font-medium transition-colors cursor-pointer ${
+            isLooping
+              ? "bg-[#00D2FF]/20 border-[#00D2FF]/60 text-[#00D2FF]"
+              : "bg-white/10 border-white/15 text-slate-300 hover:bg-white/20 hover:text-white"
+          }`}
+          title={t.chrono.loopAria}
+          aria-label={t.chrono.loopAria}
+        >
+          <Repeat className="w-3.5 h-3.5" />
+          <span>{t.chrono.loopLabel}</span>
+        </button>
       </div>
 
       {/* Epoch Scrubber */}
@@ -1211,19 +1240,6 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
           className="apple-slider w-full"
         />
       </div>
-
-      {/* Multi-Version & Spectral Gallery Modal Trigger */}
-      {versions && (
-        <button
-          type="button"
-          onClick={() => setShowGalleryModal(true)}
-          className="btn-press px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-[#00D2FF]/20 border border-white/10 hover:border-[#00D2FF]/50 text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 cursor-pointer shrink-0"
-          title={t.viewer.galleryTitle}
-        >
-          <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
-          <span className="hidden sm:inline">D1–D6</span>
-        </button>
-      )}
     </div>
   );
 
@@ -1484,34 +1500,6 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                   aria-label={t.viewer.map2FovInTitle}
                 >
                   <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Switch between Cutout+WCS and 6-Bands Grid inside Map 2 */}
-              <div className="glass-panel rounded-full p-1 flex items-center gap-1 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => setSecondMapTab("cutout")}
-                  className={`btn-press px-2.5 py-1 rounded-full cursor-pointer flex items-center gap-1 transition-colors ${
-                    secondMapTab === "cutout"
-                      ? "bg-[#00D2FF] text-slate-950 font-semibold"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  <ImageIcon className="w-3 h-3" />
-                  <span className="hidden sm:inline">FITS</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSecondMapTab("bands")}
-                  className={`btn-press px-2.5 py-1 rounded-full cursor-pointer flex items-center gap-1 transition-colors ${
-                    secondMapTab === "bands"
-                      ? "bg-[#00D2FF] text-slate-950 font-semibold"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  <Grid className="w-3 h-3" />
-                  <span className="hidden sm:inline">D1–D6</span>
                 </button>
               </div>
 
@@ -2300,7 +2288,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
         : null}
 
       {/* Optional Multi-Version & Multi-Band Gallery Modal */}
-      {isActive && showGalleryModal && (
+      {isActive && galleryOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glass-panel rounded-[24px] w-full max-w-4xl max-h-[85vh] overflow-y-auto p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -2310,7 +2298,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
               </h3>
               <button
                 type="button"
-                onClick={() => setShowGalleryModal(false)}
+                onClick={() => onCloseGallery?.()}
                 className="btn-press p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -2327,7 +2315,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
               onSelectVersionObservation={(col, obs) => {
                 onSelectVersionObservation(col, obs);
                 onToggleSecondMap(true);
-                setShowGalleryModal(false);
+                onCloseGallery?.();
               }}
             />
           </div>
@@ -2386,6 +2374,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   onSelectMap2Tab,
   onCloseMap2Tab,
   onRenameMap2Tab,
+  galleryOpen = false,
+  onCloseGallery,
   selectedObs,
   cutout,
   cutoutLoading,
@@ -2626,6 +2616,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 onChangeActiveTrajectory={setActiveTrajectory}
                 playbackSlotEl={playbackSlotEl}
                 onSyncMap1Preview={handleSyncMap1Preview}
+                galleryOpen={galleryOpen}
+                onCloseGallery={onCloseGallery}
               />
             );
           })}

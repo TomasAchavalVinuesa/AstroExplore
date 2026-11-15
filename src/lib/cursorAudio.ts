@@ -26,10 +26,10 @@ export class CursorAudioEngine {
       const masterGain = ctx.createGain();
       masterGain.gain.value = 0;
 
-      // Gentle low-pass filter (no resonance peak) for a clean, soft tone
+      // Gentle low-pass filter (no resonance peak) for a clean, deep tone
       const filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
-      filter.frequency.value = 500;
+      filter.frequency.value = 150;
       filter.Q.value = 0.5;
 
       const mainGain = ctx.createGain();
@@ -41,11 +41,11 @@ export class CursorAudioEngine {
       // Simple, warm sine pair
       const mainOsc = ctx.createOscillator();
       mainOsc.type = "sine";
-      mainOsc.frequency.value = 145;
+      mainOsc.frequency.value = 40;
 
       const subOsc = ctx.createOscillator();
       subOsc.type = "sine";
-      subOsc.frequency.value = 72.5;
+      subOsc.frequency.value = 20;
 
       mainOsc.connect(mainGain);
       subOsc.connect(subGain);
@@ -103,9 +103,9 @@ export class CursorAudioEngine {
     const norm = Math.min(1, (speedPxPerMs - MIN_SPEED) / 2.6);
     const curved = Math.pow(norm, 0.72);
 
-    // Exponential pitch mapping: ~145 Hz (slow) -> ~520 Hz (fast)
-    const minFreq = 145;
-    const maxFreq = 520;
+    // Exponential pitch mapping: ~40 Hz (slow) -> ~120 Hz (fast)
+    const minFreq = 40;
+    const maxFreq = 120;
     const freq = minFreq * Math.pow(maxFreq / minFreq, curved);
 
     // Logarithmic volume scale in decibels: -28 dB (slow) -> -10 dB (fast, ~0.316 linear)
@@ -114,7 +114,7 @@ export class CursorAudioEngine {
     const db = minDb + norm * (maxDb - minDb);
     const targetGain = Math.pow(10, db / 20);
 
-    const filterFreq = 350 + curved * 850;
+    const filterFreq = 130 + curved * 250;
 
     this.mainOsc.frequency.setTargetAtTime(freq, now, 0.035);
     this.subOsc.frequency.setTargetAtTime(freq * 0.5, now, 0.035);

@@ -247,6 +247,8 @@ export interface Translations {
     playPauseAria: string;
     prevFrameAria: string;
     nextFrameAria: string;
+    loopLabel: string;
+    loopAria: string;
     enterFullscreen: string;
     exitFullscreen: string;
     splitSecondMapButton: string;
@@ -419,7 +421,7 @@ export const translations: Record<Language, Translations> = {
       mocWideLabel: "Cobertura MOC Wide",
       mocDeepLabel: "Cobertura MOC Deep Field",
       footprintsLabel: "Ver/ocultar regiones detalladas",
-      gridLabel: "Malla RA/Dec",
+      gridLabel: "Mostrar/ocultar cuadrícula",
       allSkyButton: "Vista All-Sky (Aitoff)",
       centerOnTarget: "Centrar en objetivo",
       searchHereButton: "Consultar FITS en el centro del mapa",
@@ -558,6 +560,8 @@ export const translations: Record<Language, Translations> = {
       playPauseAria: "Reproducir o Pausar",
       prevFrameAria: "Imagen anterior",
       nextFrameAria: "Imagen siguiente",
+      loopLabel: "Bucle",
+      loopAria: "Reproducir en bucle",
       enterFullscreen: "Ver en pantalla completa",
       exitFullscreen: "Salir de pantalla completa",
       splitSecondMapButton: "Abrir Mapa detallado",
@@ -826,7 +830,7 @@ export const translations: Record<Language, Translations> = {
       mocWideLabel: "Wide MOC Coverage",
       mocDeepLabel: "Deep Field MOC Coverage",
       footprintsLabel: "Show/hide detailed regions",
-      gridLabel: "RA/Dec Grid",
+      gridLabel: "Show/hide grid",
       allSkyButton: "All-Sky View (Aitoff)",
       centerOnTarget: "Center on target",
       searchHereButton: "Query FITS at map center",
@@ -965,6 +969,8 @@ export const translations: Record<Language, Translations> = {
       playPauseAria: "Play or Pause",
       prevFrameAria: "Previous image",
       nextFrameAria: "Next image",
+      loopLabel: "Loop",
+      loopAria: "Loop playback",
       enterFullscreen: "View fullscreen",
       exitFullscreen: "Exit fullscreen",
       splitSecondMapButton: "Open Detailed Map",

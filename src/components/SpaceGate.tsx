@@ -944,9 +944,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
       {/* CONTENEDOR CENTRAL CON LOS 3 BLOQUES */}
       <div className="relative z-10 w-full max-w-[540px] flex flex-col gap-3.5 my-auto">
         <div className="text-center mb-1">
-          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30 text-[#00D2FF] text-[10px] font-mono uppercase tracking-widest mb-2">
-            <span>CHRONO-SPHEREx · NASA SPACE APPS</span>
-          </div>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-[-0.025em] text-white">
             {t.chrono.entryTitle}
           </h1>
@@ -1172,7 +1169,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
         {/* BLOQUE OBLIGATORIO 2 — Example Celestial Bodies */}
         <div
           ref={dropdownRef}
-          className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-2.5 relative"
+          className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-2.5 relative z-30"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1185,69 +1182,71 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setDropdownOpen((v) => !v)}
-            aria-expanded={dropdownOpen}
-            className="btn-press w-full rounded-xl bg-black/55 hover:bg-black/70 border border-white/15 hover:border-[#00D2FF]/60 px-3.5 py-2.5 flex items-center justify-between gap-2 text-left cursor-pointer"
-          >
-            <div className="flex items-center justify-between w-full min-w-0 pr-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-2 h-2 rounded-full bg-[#00D2FF] shrink-0" />
-                <span className="text-xs sm:text-sm font-semibold text-white truncate">
-                  {activeKnownTarget.label}
-                </span>
-                <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
-                  — {isEn ? activeKnownTarget.subtitleEn : activeKnownTarget.subtitleEs}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setDropdownOpen((v) => !v)}
+              aria-expanded={dropdownOpen}
+              className="btn-press w-full rounded-xl bg-black/55 hover:bg-black/70 border border-white/15 hover:border-[#00D2FF]/60 px-3.5 py-2.5 flex items-center justify-between gap-2 text-left cursor-pointer"
+            >
+              <div className="flex items-center justify-between w-full min-w-0 pr-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2 h-2 rounded-full bg-[#00D2FF] shrink-0" />
+                  <span className="text-xs sm:text-sm font-semibold text-white truncate">
+                    {activeKnownTarget.label}
+                  </span>
+                  <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
+                    — {isEn ? activeKnownTarget.subtitleEn : activeKnownTarget.subtitleEs}
+                  </span>
+                </div>
+                <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
+                  ({activeKnownTarget.shortCoords})
                 </span>
               </div>
-              <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
-                ({activeKnownTarget.shortCoords})
-              </span>
-            </div>
-            <ChevronDown
-              className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
-                dropdownOpen ? "rotate-180 text-[#00D2FF]" : ""
-              }`}
-            />
-          </button>
+              <ChevronDown
+                className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
+                  dropdownOpen ? "rotate-180 text-[#00D2FF]" : ""
+                }`}
+              />
+            </button>
 
-          {dropdownOpen && (
-            <div className="mt-1 max-h-[172px] overflow-y-auto rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] divide-y divide-white/10">
-              {GATE_KNOWN_TARGETS.map((item) => {
-                const active = selectedTargetId === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handlePickKnownTarget(item)}
-                    className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
-                      active
-                        ? "bg-[#00D2FF]/15 text-white"
-                        : "hover:bg-white/[0.06] text-slate-200"
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs sm:text-[13px] font-semibold text-white">
-                          {item.label}
-                        </span>
-                        <span className="font-mono text-[11px] text-[#00D2FF]">
-                          ({item.shortCoords})
-                        </span>
+            {dropdownOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[172px] overflow-y-auto rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] divide-y divide-white/10">
+                {GATE_KNOWN_TARGETS.map((item) => {
+                  const active = selectedTargetId === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handlePickKnownTarget(item)}
+                      className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
+                        active
+                          ? "bg-[#00D2FF]/15 text-white"
+                          : "hover:bg-white/[0.06] text-slate-200"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs sm:text-[13px] font-semibold text-white">
+                            {item.label}
+                          </span>
+                          <span className="font-mono text-[11px] text-[#00D2FF]">
+                            ({item.shortCoords})
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 truncate">
+                          {isEn ? item.subtitleEn : item.subtitleEs}
+                        </p>
                       </div>
-                      <p className="text-[11px] text-slate-400 truncate">
-                        {isEn ? item.subtitleEn : item.subtitleEs}
-                      </p>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {active ? "✓" : "→"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                      <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                        {active ? "✓" : "→"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

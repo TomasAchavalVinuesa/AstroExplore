@@ -144,6 +144,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [newSearchOpen, setNewSearchOpen] = useState<boolean>(false);
   const [showExposuresModal, setShowExposuresModal] = useState<boolean>(false);
+  const [showGalleryModal, setShowGalleryModal] = useState<boolean>(false);
 
   // Tuned HiPS spectral channel
   const [externalChannelIdx, setExternalChannelIdx] = useState<number | null>(null);
@@ -1245,7 +1246,7 @@ export default function App() {
           <div className="relative mb-5 flex items-center justify-center">
             <div className="rocket-animate text-[#00D2FF] drop-shadow-[0_0_20px_rgba(0,210,255,0.6)]">
               <svg
-                className="w-12 h-12"
+                className="w-12 h-12 overflow-visible"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -1336,6 +1337,8 @@ export default function App() {
               onSelectPreset={handleSelectPreset}
               onSearchCelestialName={handleSearchCelestialName}
               onOpenExposuresDrawer={() => setShowExposuresModal(true)}
+              hasVersions={Boolean(versions)}
+              onOpenGalleryModal={() => setShowGalleryModal(true)}
             />
           </div>
         </div>
@@ -1366,6 +1369,8 @@ export default function App() {
           onChangeFov={handleChangeFov}
           onSelectVersionObservation={handleSelectVersionObservation}
           onQueryAtCoords={handleQueryAtCoords}
+          galleryOpen={showGalleryModal}
+          onCloseGallery={() => setShowGalleryModal(false)}
         />
       </section>
 

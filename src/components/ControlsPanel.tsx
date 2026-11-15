@@ -5,6 +5,7 @@ import {
   Eye,
   Layers,
   Sliders,
+  Sparkles,
   X,
 } from "lucide-react";
 import type {
@@ -54,6 +55,8 @@ interface ControlsPanelProps {
   onSelectPreset: (preset: TargetPreset) => void;
   onSearchCelestialName: (name: string) => void;
   onOpenExposuresDrawer?: () => void;
+  hasVersions?: boolean;
+  onOpenGalleryModal?: () => void;
 }
 
 export const ControlsPanel: React.FC<ControlsPanelProps> = ({
@@ -75,8 +78,11 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   onClose,
   onChangeFov,
   onOpenExposuresDrawer,
+  hasVersions = false,
+  onOpenGalleryModal,
 }) => {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
+  const isEn = language === "en";
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const numericSize = Math.min(
@@ -137,6 +143,22 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
             className="apple-slider w-full"
           />
         </div>
+
+        {/* D1–D6 Spectral Bands & Versions Gallery */}
+        {hasVersions && onOpenGalleryModal && (
+          <button
+            type="button"
+            onClick={onOpenGalleryModal}
+            title={t.viewer.galleryTitle}
+            className="btn-press w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/[0.05] hover:bg-[#00D2FF]/15 border border-white/10 hover:border-[#00D2FF]/45 text-xs font-medium text-slate-200 hover:text-white cursor-pointer transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
+              <span>{isEn ? "Bands D1–D6" : "Bandas D1–D6"}</span>
+            </span>
+            <span className="text-[#00D2FF] font-mono">→</span>
+          </button>
+        )}
 
         {/* Collapsible Scientific & Band Controls */}
         <div className="pt-2 border-t border-white/10 space-y-2">
