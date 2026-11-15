@@ -1,0 +1,1363 @@
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  AlertCircle,
+  ArrowLeftRight,
+  CheckCircle2,
+  ChevronDown,
+  Compass,
+  Loader2,
+  PencilLine,
+  Radio,
+  Search,
+  Sparkles,
+} from "lucide-react";
+import {
+  formatDectoDMS,
+  formatRAtoHMS,
+  parseDec as baseParseDec,
+  parseRA as baseParseRA,
+} from "../lib/coordinates";
+import { resolveCelestialName } from "../lib/celestialResolver";
+import { useLanguage } from "../i18n/LanguageContext";
+import type {
+  CollectionQueryMode,
+  ResolvedCelestialObject,
+  TargetPreset,
+} from "../lib/types";
+
+/**
+ * ============================================================================
+ * SpaceGate.tsx — Archivo Único de la Nueva Pantalla de Inicio (3D + HUD + 3 Bloques)
+ * ============================================================================
+ * Ubicación en el proyecto: `src/components/SpaceGate.tsx`
+ *
+ * Incluye todo el inicio en un solo archivo listo para enchufar:
+ * 1. `CosmicBackground`: Galaxia espiral + vórtice 3D en Canvas con efecto presencia
+ *    del mouse, grilla astronómica RA/Dec y salto warp de 1.2s (`warpTo`).
+ * 2. `SpaceGate`: HUD de telemetría espacial + Tarjeta Hero (Free Navigation con botón
+ *    magnético) + Buscador por Coordenadas (HMS/DMS ⇄ Grados con validación en vivo)
+ *    + Buscador por Cuerpo Celeste (Custom Input conectado a CDS Sesame + los 5 objetos
+ *    de referencia con tipeo telemetría).
+ */
+
+export function parseRAFlexible(raw: string): number | null {
+  const s = raw.trim().replace(/°|deg$/i, "").trim();
+  if (!s) return null;
+  const direct = baseParseRA(s);
+  if (direct !== null) return direct;
+  const match = s.match(
+    /^(\d{1,2})\s*[h:\s]\s*(\d{1,2})(?:\s*[m:\s]\s*(\d{1,2}(?:\.\d+)?))?\s*[ms]?$/i
+  );
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  const sec = match[3] !== undefined ? Number(match[3]) : 0;
+  if (h > 24 || m >= 60 || sec >= 60) return null;
+  const deg = (h + m / 60 + sec / 3600) * 15;
+  return deg >= 0 && deg <= 360 ? deg : null;
+}
+
+export function parseDecFlexible(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const decCandidate = s.replace(/°|deg$/i, "").trim();
+  const direct = baseParseDec(decCandidate);
+  if (direct !== null) return direct;
+  const match = s.match(
+    /^([+-]?)\s*(\d{1,2})\s*[d°:\s]\s*(\d{1,2})(?:\s*[m'’:\s]\s*(\d{1,2}(?:\.\d+)?))?\s*[s"”']?$/i
+  );
+  if (!match) return null;
+  const sign = match[1] === "-" ? -1 : 1;
+  const d = Number(match[2]);
+  const m = Number(match[3]);
+  const sec = match[4] !== undefined ? Number(match[4]) : 0;
+  if (d > 90 || m >= 60 || sec >= 60) return null;
+  const deg = sign * (d + m / 60 + sec / 3600);
+  return deg >= -90 && deg <= 90 ? deg : null;
+}
+
+export interface CosmicBackgroundHandle {
+  warpTo: (target?: { ra: number; dec: number } | null, durationMs?: number) => Promise<void>;
+}
+
+export interface CosmicBackgroundProps {
+  mode?: "gate" | "explorer";
+  onCursorSky?: (sky: { ra: number; dec: number } | null) => void;
+}
+
+const DEG = Math.PI / 180;
+const CYAN: [number, number, number] = [0, 210, 255];
+const AMBER: [number, number, number] = [255, 183, 3];
+const WHITE: [number, number, number] = [226, 240, 255];
+
+interface GalaxyParticle {
+  r: number;
+  theta: number;
+  y: number;
+  omega: number;
+  size: number;
+  rgb: string;
+  alpha: number;
+}
+
+interface WarpStar {
+  x: number;
+  y: number;
+  z: number;
+  pz: number;
+}
+
+function mixRgb(a: [number, number, number], b: [number, number, number], t: number): string {
+  const k = Math.max(0, Math.min(1, t));
+  return `${Math.round(a[0] + (b[0] - a[0]) * k)},${Math.round(
+    a[1] + (b[1] - a[1]) * k
+  )},${Math.round(a[2] + (b[2] - a[2]) * k)}`;
+}
+
+function gaussianRand(): number {
+  let u = 0;
+  let v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function buildGalaxyParticles(count: number): GalaxyParticle[] {
+  const arms = 3;
+  const twist = 3.2;
+  const out: GalaxyParticle[] = [];
+  for (let i = 0; i < count; i++) {
+    const isCore = Math.random() < 0.18;
+    const r = isCore
+      ? Math.abs(gaussianRand()) * 0.12
+      : Math.pow(Math.random(), 0.75) * 0.95 + 0.04;
+    const arm = i % arms;
+    const spread = (isCore ? 1.4 : 0.32) * (1 - r * 0.35);
+    const theta = (arm / arms) * Math.PI * 2 + r * twist + gaussianRand() * spread;
+    const y = gaussianRand() * 0.025 * (1.2 - r);
+    const omega = 0.05 + 0.16 / Math.sqrt(r + 0.05);
+    const t = Math.min(1, r / 0.55);
+    const rgb =
+      Math.random() < 0.08
+        ? mixRgb(WHITE, WHITE, 0)
+        : mixRgb(AMBER, CYAN, t + gaussianRand() * 0.12);
+    out.push({
+      r,
+      theta,
+      y,
+      omega: omega * 0.12,
+      size: Math.random() < 0.04 ? 1.9 : Math.random() < 0.3 ? 1.25 : 0.85,
+      rgb,
+      alpha: isCore ? 0.55 + Math.random() * 0.4 : 0.25 + Math.random() * 0.55,
+    });
+  }
+  return out;
+}
+
+function buildWarpStarfield(count: number): WarpStar[] {
+  const out: WarpStar[] = [];
+  for (let i = 0; i < count; i++) {
+    const z = Math.random();
+    out.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z, pz: z });
+  }
+  return out;
+}
+
+function skyToView(ra: number, dec: number, ra0: number, dec0: number) {
+  const a = ra * DEG;
+  const d = dec * DEG;
+  const a0 = ra0 * DEG;
+  const d0 = dec0 * DEG;
+  const cosC = Math.sin(d0) * Math.sin(d) + Math.cos(d0) * Math.cos(d) * Math.cos(a - a0);
+  const x = -Math.cos(d) * Math.sin(a - a0);
+  const y = Math.cos(d0) * Math.sin(d) - Math.sin(d0) * Math.cos(d) * Math.cos(a - a0);
+  return { x, y, visible: cosC > 0 };
+}
+
+function viewToSky(
+  x: number,
+  y: number,
+  ra0: number,
+  dec0: number
+): { ra: number; dec: number } | null {
+  const rho2 = x * x + y * y;
+  if (rho2 > 1) return null;
+  const rho = Math.sqrt(rho2);
+  const d0 = dec0 * DEG;
+  if (rho < 1e-9) return { ra: ra0, dec: dec0 };
+  const c = Math.asin(rho);
+  const dec = Math.asin(Math.cos(c) * Math.sin(d0) + (y * Math.sin(c) * Math.cos(d0)) / rho);
+  const ra =
+    ra0 * DEG +
+    Math.atan2(-x * Math.sin(c), rho * Math.cos(d0) * Math.cos(c) - y * Math.sin(d0) * Math.sin(c));
+  return { ra: (((ra / DEG) % 360) + 360) % 360, dec: dec / DEG };
+}
+
+export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgroundProps>(
+  function CosmicBackground({ mode = "gate", onCursorSky }, ref) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const modeRef = useRef(mode);
+    const onCursorSkyRef = useRef(onCursorSky);
+    const warpRef = useRef<{
+      start: number;
+      duration: number;
+      focusX: number;
+      focusY: number;
+      resolve: (() => void) | null;
+    } | null>(null);
+    const viewRef = useRef({ ra0: 133.8, dec0: 12, sphereR: 1, cx: 0, cy: 0 });
+
+    modeRef.current = mode;
+    onCursorSkyRef.current = onCursorSky;
+
+    useImperativeHandle(ref, () => ({
+      warpTo: (target, durationMs = 1200) =>
+        new Promise<void>((resolve) => {
+          const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          let focusX = 0;
+          let focusY = 0;
+          if (target) {
+            const v = viewRef.current;
+            const p = skyToView(target.ra, target.dec, v.ra0, v.dec0);
+            if (p.visible) {
+              focusX = Math.max(-0.35, Math.min(0.35, p.x * 0.6));
+              focusY = Math.max(-0.35, Math.min(0.35, -p.y * 0.6));
+            }
+          }
+          warpRef.current?.resolve?.();
+          warpRef.current = {
+            start: performance.now(),
+            duration: reduced ? 280 : durationMs,
+            focusX,
+            focusY,
+            resolve,
+          };
+        }),
+    }));
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) return;
+
+      const reducedMq = window.matchMedia("(prefers-reduced-motion: reduce)");
+      let reduced = reducedMq.matches;
+      const onReducedChange = () => {
+        reduced = reducedMq.matches;
+      };
+      reducedMq.addEventListener("change", onReducedChange);
+
+      let w = 0;
+      let h = 0;
+      let dpr = 1;
+      let galaxy: GalaxyParticle[] = [];
+      let stars: WarpStar[] = [];
+
+      const resize = () => {
+        dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const area = w * h;
+        const galaxyCount = Math.round(Math.min(5200, Math.max(1800, area / 260)));
+        galaxy = buildGalaxyParticles(galaxyCount);
+        stars = buildWarpStarfield(Math.round(Math.min(900, Math.max(350, area / 1800))));
+        viewRef.current.cx = w / 2;
+        viewRef.current.cy = h / 2;
+        viewRef.current.sphereR = Math.max(w, h) * 0.78;
+      };
+      resize();
+      window.addEventListener("resize", resize);
+
+      const mouse = { x: w / 2, y: h / 2, sx: w / 2, sy: h / 2, inside: false, moved: true };
+      const onMove = (e: PointerEvent) => {
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+        mouse.inside = true;
+        mouse.moved = true;
+      };
+      const onLeave = () => {
+        mouse.inside = false;
+        mouse.moved = true;
+        onCursorSkyRef.current?.(null);
+      };
+      window.addEventListener("pointermove", onMove, { passive: true });
+      document.addEventListener("pointerleave", onLeave);
+
+      let dim = modeRef.current === "explorer" ? 1 : 0;
+      let last = performance.now();
+      let raf = 0;
+      let frame = 0;
+
+      const drawGraticule = (alpha: number) => {
+        const v = viewRef.current;
+        ctx.save();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(0,210,255,${alpha})`;
+        const toScreen = (ra: number, dec: number) => {
+          const p = skyToView(ra, dec, v.ra0, v.dec0);
+          return { sx: v.cx + p.x * v.sphereR, sy: v.cy - p.y * v.sphereR, visible: p.visible };
+        };
+        for (let ra = 0; ra < 360; ra += 30) {
+          ctx.beginPath();
+          let pen = false;
+          for (let dec = -88; dec <= 88; dec += 4) {
+            const s = toScreen(ra, dec);
+            if (!s.visible) {
+              pen = false;
+              continue;
+            }
+            if (pen) ctx.lineTo(s.sx, s.sy);
+            else ctx.moveTo(s.sx, s.sy);
+            pen = true;
+          }
+          ctx.stroke();
+        }
+        for (let dec = -75; dec <= 75; dec += 15) {
+          ctx.beginPath();
+          let pen = false;
+          for (let ra = 0; ra <= 360; ra += 4) {
+            const s = toScreen(ra, dec);
+            if (!s.visible) {
+              pen = false;
+              continue;
+            }
+            if (pen) ctx.lineTo(s.sx, s.sy);
+            else ctx.moveTo(s.sx, s.sy);
+            pen = true;
+          }
+          ctx.stroke();
+        }
+        ctx.strokeStyle = `rgba(255,183,3,${alpha * 1.4})`;
+        ctx.beginPath();
+        let pen = false;
+        for (let ra = 0; ra <= 360; ra += 3) {
+          const s = toScreen(ra, 0);
+          if (!s.visible) {
+            pen = false;
+            continue;
+          }
+          if (pen) ctx.lineTo(s.sx, s.sy);
+          else ctx.moveTo(s.sx, s.sy);
+          pen = true;
+        }
+        ctx.stroke();
+        ctx.restore();
+      };
+
+      const tick = (now: number) => {
+        raf = requestAnimationFrame(tick);
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+        frame++;
+
+        const targetDim = modeRef.current === "explorer" ? 1 : 0;
+        dim += (targetDim - dim) * Math.min(1, dt * 3);
+        if (dim > 0.97 && !warpRef.current && frame % 2 === 1) return;
+
+        let warp = 0;
+        let warpProgress = 0;
+        let focusX = 0;
+        let focusY = 0;
+        const wstate = warpRef.current;
+        if (wstate) {
+          warpProgress = Math.min(1, (now - wstate.start) / wstate.duration);
+          warp = reduced ? 0 : Math.sin(Math.PI * Math.pow(warpProgress, 0.8));
+          const e = easeInOutCubic(warpProgress);
+          focusX = wstate.focusX * e;
+          focusY = wstate.focusY * e;
+          if (warpProgress >= 1) {
+            wstate.resolve?.();
+            warpRef.current = null;
+          }
+        }
+
+        const k = reduced ? 0.25 : Math.min(1, dt * 6);
+        mouse.sx += (mouse.x - mouse.sx) * k;
+        mouse.sy += (mouse.y - mouse.sy) * k;
+        const nx = (mouse.sx / w - 0.5) * 2;
+        const ny = (mouse.sy / h - 0.5) * 2;
+
+        const v = viewRef.current;
+        if (!reduced) v.ra0 = (v.ra0 + dt * 0.6) % 360;
+        const skyDec0 = 12 - ny * 6;
+        v.dec0 += (skyDec0 - v.dec0) * Math.min(1, dt * 2);
+
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = warp > 0.05 ? `rgba(8,11,16,${0.5 - warp * 0.3})` : "#080B10";
+        ctx.fillRect(0, 0, w, h);
+
+        const fade = 1 - dim * 0.62;
+
+        const neb = [
+          [w * 0.22, h * 0.28, Math.max(w, h) * 0.45, "0,140,200", 0.1],
+          [w * 0.8, h * 0.74, Math.max(w, h) * 0.42, "160,96,40", 0.09],
+        ] as const;
+        neb.forEach(([x, y, r, c, a]) => {
+          const g = ctx.createRadialGradient(x - nx * 20, y - ny * 20, 0, x, y, r);
+          g.addColorStop(0, `rgba(${c},${a * fade})`);
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, w, h);
+        });
+
+        drawGraticule(0.055 * fade * (1 - warp));
+
+        ctx.globalCompositeOperation = "lighter";
+
+        const vpX = w / 2 + focusX * w - nx * 14;
+        const vpY = h / 2 + focusY * h - ny * 14;
+        const speed = reduced ? 0 : 0.012 + warp * 1.9;
+        const scale = Math.max(w, h) * 0.5;
+        for (const s of stars) {
+          s.pz = s.z;
+          s.z -= speed * dt * (warp > 0 ? 1 : 0.4);
+          if (s.z <= 0.02) {
+            s.x = (Math.random() - 0.5) * 2;
+            s.y = (Math.random() - 0.5) * 2;
+            s.z = 1;
+            s.pz = 1;
+          }
+          const px = vpX + (s.x / s.z) * scale * 0.5;
+          const py = vpY + (s.y / s.z) * scale * 0.5;
+          if (px < -50 || px > w + 50 || py < -50 || py > h + 50) continue;
+          const bright = Math.min(1, (1 - s.z) * 1.3 + 0.15) * fade;
+          if (warp > 0.05) {
+            const ox = vpX + (s.x / s.pz) * scale * 0.5;
+            const oy = vpY + (s.y / s.pz) * scale * 0.5;
+            const tail = 1 + warp * 6;
+            ctx.strokeStyle = `rgba(${s.x > 0 ? "170,235,255" : "255,220,160"},${
+              bright * (0.4 + warp * 0.6)
+            })`;
+            ctx.lineWidth = Math.max(0.6, (1 - s.z) * 2.2);
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(px + (ox - px) * tail, py + (oy - py) * tail);
+            ctx.stroke();
+          } else {
+            const size = (1 - s.z) * 1.6 + 0.4;
+            ctx.fillStyle = `rgba(226,236,255,${bright * 0.75})`;
+            ctx.fillRect(px, py, size, size);
+          }
+        }
+
+        const gScale = Math.min(w, h) * (0.5 + dim * 0.1) * (1 + warp * 2.6);
+        const gcx = w * 0.5 - nx * 26 + focusX * w * 0.5;
+        const gcy = h * 0.5 - ny * 18 + focusY * h * 0.5;
+        const tilt = (62 + ny * 7) * DEG;
+        const yaw = nx * 0.18;
+        const cosT = Math.cos(tilt);
+        const sinT = Math.sin(tilt);
+        const camZ = 2.4;
+        const galaxyAlpha = fade * (1 - warp * 0.85) * (1 - dim * 0.35);
+        const presenceR = Math.min(w, h) * 0.16;
+        const mx = mouse.sx;
+        const my = mouse.sy;
+        const presence = mouse.inside && !reduced ? 1 - dim : 0;
+        const spin = reduced ? 0 : dt;
+
+        for (const p of galaxy) {
+          p.theta += p.omega * spin * (1 + warp * 6);
+          const a = p.theta + yaw;
+          const x3 = Math.cos(a) * p.r;
+          const z3 = Math.sin(a) * p.r;
+          const y3 = p.y;
+          const yr = y3 * cosT - z3 * sinT;
+          const zr = y3 * sinT + z3 * cosT;
+          const persp = camZ / (camZ + zr);
+          let sx = gcx + x3 * gScale * persp;
+          let sy = gcy + yr * gScale * persp;
+
+          let boost = 0;
+          if (presence > 0) {
+            const dx = sx - mx;
+            const dy = sy - my;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < presenceR * presenceR) {
+              const d = Math.sqrt(d2) || 1;
+              const f = (1 - d / presenceR) * presence;
+              sx += (dx / d) * f * 22 - (dy / d) * f * 10;
+              sy += (dy / d) * f * 22 + (dx / d) * f * 10;
+              boost = f * 0.6;
+            }
+          }
+          if (sx < -4 || sx > w + 4 || sy < -4 || sy > h + 4) continue;
+          const alpha = Math.min(1, (p.alpha + boost) * galaxyAlpha * (0.6 + persp * 0.4));
+          if (alpha < 0.02) continue;
+          ctx.fillStyle = `rgba(${p.rgb},${alpha})`;
+          const size = p.size * persp * (1 + warp * 0.8);
+          ctx.fillRect(sx, sy, size, size);
+        }
+
+        const coreR = gScale * 0.22;
+        const core = ctx.createRadialGradient(gcx, gcy, 0, gcx, gcy, coreR);
+        core.addColorStop(0, `rgba(255,214,140,${0.32 * galaxyAlpha})`);
+        core.addColorStop(0.4, `rgba(255,170,60,${0.1 * galaxyAlpha})`);
+        core.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = core;
+        ctx.fillRect(gcx - coreR, gcy - coreR, coreR * 2, coreR * 2);
+
+        if (warp > 0.4) {
+          const flash = ctx.createRadialGradient(vpX, vpY, 0, vpX, vpY, Math.max(w, h) * 0.5);
+          flash.addColorStop(0, `rgba(180,240,255,${(warp - 0.4) * 0.35})`);
+          flash.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = flash;
+          ctx.fillRect(0, 0, w, h);
+        }
+
+        if (mouse.inside && (mouse.moved || frame % 6 === 0)) {
+          mouse.moved = false;
+          const sky = viewToSky(
+            (mouse.x - v.cx) / v.sphereR,
+            -(mouse.y - v.cy) / v.sphereR,
+            v.ra0,
+            v.dec0
+          );
+          onCursorSkyRef.current?.(sky);
+        }
+      };
+      raf = requestAnimationFrame(tick);
+
+      return () => {
+        cancelAnimationFrame(raf);
+        window.removeEventListener("resize", resize);
+        window.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerleave", onLeave);
+        reducedMq.removeEventListener("change", onReducedChange);
+        warpRef.current?.resolve?.();
+      };
+    }, []);
+
+    return (
+      <canvas
+        ref={canvasRef}
+        id="cosmos-bg"
+        aria-hidden="true"
+        className="fixed inset-0 z-0 pointer-events-none"
+      />
+    );
+  }
+);
+
+export interface GateKnownTarget {
+  id: string;
+  label: string;
+  queryName: string;
+  shortCoords: string;
+  raHms: string;
+  decDms: string;
+  collection: CollectionQueryMode;
+  subtitleEs: string;
+  subtitleEn: string;
+}
+
+export const GATE_KNOWN_TARGETS: GateKnownTarget[] = [
+  {
+    id: "wise_0855",
+    label: "WISE 0855",
+    queryName: "WISE 0855",
+    shortCoords: "08h 55m · -07° 14'",
+    raHms: "08h 55m 10.831s",
+    decDms: "-07° 14' 42.53\"",
+    collection: "spherex_dr1",
+    subtitleEs: "Enana marrón helada",
+    subtitleEn: "Frosty Y-type brown dwarf",
+  },
+  {
+    id: "barnards_star",
+    label: "Barnard's Star",
+    queryName: "Barnard's Star",
+    shortCoords: "17h 57m · +04° 41'",
+    raHms: "17h 57m 48.498s",
+    decDms: "+04° 41' 36.11\"",
+    collection: "spherex_dr1",
+    subtitleEs: "Estrella de alto movimiento propio",
+    subtitleEn: "High proper-motion red dwarf",
+  },
+  {
+    id: "epsilon_indi_b",
+    label: "Epsilon Indi B",
+    queryName: "Epsilon Indi B",
+    shortCoords: "22h 04m · -56° 47'",
+    raHms: "22h 04m 10.595s",
+    decDms: "-56° 46' 58.24\"",
+    collection: "spherex_dr1",
+    subtitleEs: "Enana marrón T1/T6",
+    subtitleEn: "Binary brown dwarf T1/T6",
+  },
+  {
+    id: "rw_aurigae",
+    label: "RW Aurigae",
+    queryName: "RW Aurigae",
+    shortCoords: "05h 07m · +30° 24'",
+    raHms: "05h 07m 49.566s",
+    decDms: "+30° 24' 05.18\"",
+    collection: "spherex_dr1",
+    subtitleEs: "Estrella joven variable",
+    subtitleEn: "Young T Tauri variable star",
+  },
+  {
+    id: "r_draconis",
+    label: "R Draconis",
+    queryName: "R Draconis",
+    shortCoords: "16h 32m · +66° 45'",
+    raHms: "16h 32m 40.227s",
+    decDms: "+66° 45' 17.93\"",
+    collection: "spherex_dr1",
+    subtitleEs: "Gigante roja variable Mira",
+    subtitleEn: "Mira-type variable red giant",
+  },
+];
+
+export interface SpaceGateProps {
+  raInput: string;
+  setRaInput: (val: string) => void;
+  decInput: string;
+  setDecInput: (val: string) => void;
+  cursorSky?: { ra: number; dec: number } | null;
+  warping?: boolean;
+  loading?: boolean;
+  /** Si es true (por defecto), incluye el Canvas 3D de Galaxia + Vórtice automáticamente */
+  withBackground?: boolean;
+  backgroundMode?: "gate" | "explorer";
+  onExploreFree: () => void;
+  onLaunchToCoords: (params: {
+    ra: string;
+    dec: string;
+    raDeg: number;
+    decDeg: number;
+    targetLabel?: string;
+    preset?: TargetPreset | null;
+    resolved?: ResolvedCelestialObject | null;
+  }) => void;
+}
+
+const TELEMETRY_GLYPHS = "0123456789h°'\"+-.";
+
+function isDecimalFormat(raw: string): boolean {
+  const s = raw.trim().replace(/°|deg$/i, "").trim();
+  return /^[+-]?\d+(\.\d+)?$/.test(s);
+}
+
+export const SpaceGate: React.FC<SpaceGateProps> = ({
+  raInput,
+  setRaInput,
+  decInput,
+  setDecInput,
+  cursorSky: externalCursorSky,
+  warping = false,
+  loading = false,
+  withBackground = false,
+  backgroundMode = "gate",
+  onExploreFree,
+  onLaunchToCoords,
+}) => {
+  const { language, t } = useLanguage();
+  const isEn = language === "en";
+
+  const internalBgRef = useRef<CosmicBackgroundHandle | null>(null);
+  const [internalCursorSky, setInternalCursorSky] = useState<{ ra: number; dec: number } | null>(
+    null
+  );
+  const cursorSky = externalCursorSky !== undefined ? externalCursorSky : internalCursorSky;
+
+  const cardStarsRef = useRef<HTMLCanvasElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const customNameInputRef = useRef<HTMLInputElement | null>(null);
+  const typingTimerRef = useRef<number | null>(null);
+
+  const [magOffset, setMagOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [coordError, setCoordError] = useState<string | null>(null);
+  const [isTypingTelemetry, setIsTypingTelemetry] = useState(false);
+
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | "custom">("wise_0855");
+  const [customQuery, setCustomQuery] = useState("");
+  const [resolvingCustom, setResolvingCustom] = useState(false);
+  const [customResolved, setCustomResolved] = useState<ResolvedCelestialObject | null>(null);
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  const raDeg = useMemo(() => parseRAFlexible(raInput), [raInput]);
+  const decDeg = useMemo(() => parseDecFlexible(decInput), [decInput]);
+  const coordsValid = raDeg !== null && decDeg !== null;
+
+  useEffect(() => {
+    const drawCardStars = () => {
+      const c = cardStarsRef.current;
+      if (!c) return;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      c.width = c.offsetWidth || 520;
+      c.height = c.offsetHeight || 220;
+      const w = c.width;
+      const h = c.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const rg = ctx.createRadialGradient(w * 0.3, h * 0.3, 8, w * 0.5, h * 0.5, w * 0.75);
+      rg.addColorStop(0, "rgba(0, 210, 255, 0.14)");
+      rg.addColorStop(0.55, "rgba(255, 183, 3, 0.07)");
+      rg.addColorStop(1, "transparent");
+      ctx.fillStyle = rg;
+      ctx.fillRect(0, 0, w, h);
+
+      for (let i = 0; i < 130; i++) {
+        const x = (i * 104729) % w;
+        const y = (i * 32452843) % h;
+        const r = i % 9 === 0 ? 1.4 : 0.7;
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.22 + (i % 6) * 0.1})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+    drawCardStars();
+    window.addEventListener("resize", drawCardStars);
+    return () => window.removeEventListener("resize", drawCardStars);
+  }, []);
+
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [dropdownOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+    };
+  }, []);
+
+  const animateTelemetryFill = useCallback(
+    (targetRa: string, targetDec: string) => {
+      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+      setCoordError(null);
+
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduced) {
+        setRaInput(targetRa);
+        setDecInput(targetDec);
+        setIsTypingTelemetry(false);
+        return;
+      }
+
+      setIsTypingTelemetry(true);
+      const totalSteps = 14;
+      let step = 0;
+
+      typingTimerRef.current = window.setInterval(() => {
+        step++;
+        const progress = step / totalSteps;
+        if (step >= totalSteps) {
+          if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+          typingTimerRef.current = null;
+          setRaInput(targetRa);
+          setDecInput(targetDec);
+          setIsTypingTelemetry(false);
+          return;
+        }
+
+        const scramble = (finalStr: string) => {
+          const revealCount = Math.floor(finalStr.length * progress);
+          let out = finalStr.slice(0, revealCount);
+          for (let i = revealCount; i < finalStr.length; i++) {
+            const ch = finalStr[i];
+            if (ch === " ") out += " ";
+            else out += TELEMETRY_GLYPHS[(step * 7 + i * 13) % TELEMETRY_GLYPHS.length];
+          }
+          return out;
+        };
+
+        setRaInput(scramble(targetRa));
+        setDecInput(scramble(targetDec));
+      }, 24);
+    },
+    [setRaInput, setDecInput]
+  );
+
+  const handleToggleCoordinateFormat = () => {
+    if (raDeg === null || decDeg === null) return;
+    const currentlyDecimal = isDecimalFormat(raInput) && isDecimalFormat(decInput);
+    if (currentlyDecimal) {
+      setRaInput(formatRAtoHMS(raDeg));
+      setDecInput(formatDectoDMS(decDeg));
+    } else {
+      const sign = decDeg >= 0 ? "+" : "";
+      setRaInput(`${raDeg.toFixed(4)}°`);
+      setDecInput(`${sign}${decDeg.toFixed(4)}°`);
+    }
+  };
+
+  const handlePickKnownTarget = (target: GateKnownTarget) => {
+    setSelectedTargetId(target.id);
+    setCustomError(null);
+    setCustomResolved(null);
+    setDropdownOpen(false);
+    animateTelemetryFill(target.raHms, target.decDms);
+  };
+
+  const handlePickCustomOption = () => {
+    setSelectedTargetId("custom");
+    setDropdownOpen(false);
+    setCustomError(null);
+    window.setTimeout(() => {
+      customNameInputRef.current?.focus();
+    }, 40);
+  };
+
+  const handleResolveCustomName = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const q = customQuery.trim();
+    if (!q) return;
+
+    setResolvingCustom(true);
+    setCustomError(null);
+    try {
+      const resolved = await resolveCelestialName(q);
+      setCustomResolved(resolved);
+      animateTelemetryFill(resolved.raHms, resolved.decDms);
+    } catch {
+      setCustomResolved(null);
+      setCustomError(
+        isEn
+          ? `Could not resolve "${q}" in CDS Sesame (SIMBAD/NED/VizieR).`
+          : `No se encontró "${q}" en CDS Sesame (SIMBAD/NED/VizieR).`
+      );
+    } finally {
+      setResolvingCustom(false);
+    }
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (raDeg === null) {
+      setCoordError(
+        isEn
+          ? "Please enter a valid Right Ascension (00h 00m 00.0s or 0°–360°)."
+          : "Ingresá una Ascensión Recta válida (00h 00m 00.0s o 0°–360°)."
+      );
+      return;
+    }
+    if (decDeg === null) {
+      setCoordError(
+        isEn
+          ? "Please enter a valid Declination (+00° 00' 00\" or -90° to +90°)."
+          : "Ingresá una Declinación válida (+00° 00' 00\" o -90° a +90°)."
+      );
+      return;
+    }
+    setCoordError(null);
+
+    const activeKnown =
+      selectedTargetId !== "custom"
+        ? GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? null
+        : null;
+
+    const matchingPreset = activeKnown
+      ? t.presets.find((p) => p.id === activeKnown.id) ?? null
+      : null;
+
+    const label =
+      selectedTargetId === "custom" && customResolved
+        ? customResolved.canonicalName
+        : activeKnown
+          ? activeKnown.label
+          : undefined;
+
+    if (withBackground && internalBgRef.current) {
+      void internalBgRef.current.warpTo({ ra: raDeg, dec: decDeg }, 1200);
+    }
+
+    onLaunchToCoords({
+      ra: raInput.trim(),
+      dec: decInput.trim(),
+      raDeg,
+      decDeg,
+      targetLabel: label,
+      preset: matchingPreset,
+      resolved: selectedTargetId === "custom" ? customResolved : null,
+    });
+  };
+
+  const handleFreeClick = () => {
+    if (withBackground && internalBgRef.current) {
+      void internalBgRef.current.warpTo(
+        raDeg !== null && decDeg !== null ? { ra: raDeg, dec: decDeg } : null,
+        1200
+      );
+    }
+    onExploreFree();
+  };
+
+  const activeKnownTarget =
+    selectedTargetId !== "custom"
+      ? GATE_KNOWN_TARGETS.find((k) => k.id === selectedTargetId) ?? GATE_KNOWN_TARGETS[0]
+      : null;
+
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center px-4 sm:px-6 py-8 overflow-y-auto">
+      {withBackground && (
+        <CosmicBackground
+          ref={internalBgRef}
+          mode={backgroundMode}
+          onCursorSky={setInternalCursorSky}
+        />
+      )}
+
+      {/* HUD DE TELEMETRÍA ESPACIAL EN LAS ESQUINAS */}
+      <div className="pointer-events-none fixed top-5 left-6 z-20 hidden sm:flex flex-col gap-1.5 font-mono text-[11px]">
+        <div className="glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-3 border border-white/10">
+          <span className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
+            <span>IRSA SIA API: ONLINE</span>
+          </span>
+          <span className="text-slate-600">·</span>
+          <span className="text-[#00D2FF]">
+            {isEn ? "EPOCH: SPHEREx DR1 / QR3" : "ÉPOCA: SPHEREx DR1 / QR3"}
+          </span>
+        </div>
+
+        <div className="glass-panel rounded-xl px-3.5 py-1.5 flex items-center gap-2.5 text-[11px] text-slate-300 border border-white/10">
+          <Compass className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
+          {cursorSky ? (
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">RA</span>
+              <span className="text-white font-semibold">{formatRAtoHMS(cursorSky.ra)}</span>
+              <span className="text-slate-500">({cursorSky.ra.toFixed(3)}°)</span>
+              <span className="text-slate-600">|</span>
+              <span className="text-slate-400">Dec</span>
+              <span className="text-white font-semibold">{formatDectoDMS(cursorSky.dec)}</span>
+              <span className="text-slate-500">
+                ({cursorSky.dec >= 0 ? "+" : ""}
+                {cursorSky.dec.toFixed(3)}°)
+              </span>
+            </div>
+          ) : (
+            <span className="text-slate-400">
+              {isEn
+                ? "CURSOR: Move across the sky sphere"
+                : "CURSOR: Mové el puntero por la esfera celeste"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="pointer-events-none fixed bottom-4 left-6 z-20 hidden md:flex items-center gap-2 font-mono text-[10px] text-slate-400/90">
+        <Radio className="w-3 h-3 text-[#00D2FF]" />
+        <span>NASA/IPAC IRSA · ICRS J2000 · 102 BANDS (0.75–5.00 µm · D1–D6)</span>
+      </div>
+
+      <div className="pointer-events-none fixed bottom-4 right-6 z-20 hidden md:flex items-center gap-2 font-mono text-[10px] text-slate-400/90">
+        <span>CDS SESAME (SIMBAD · NED · VIZIER)</span>
+        <span className="w-1.5 h-1.5 rounded-full bg-[#00D2FF]" />
+      </div>
+
+      {/* CONTENEDOR CENTRAL CON LOS 3 BLOQUES */}
+      <div className="relative z-10 w-full max-w-[540px] flex flex-col gap-3.5 my-auto">
+        <div className="text-center mb-1">
+          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#00D2FF]/10 border border-[#00D2FF]/30 text-[#00D2FF] text-[10px] font-mono uppercase tracking-widest mb-2">
+            <span>CHRONO-SPHEREx · NASA SPACE APPS</span>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-[-0.025em] text-white">
+            {t.chrono.entryTitle}
+          </h1>
+        </div>
+
+        {/* TARJETA HERO — Free Navigation */}
+        <div
+          id="hero-start-card"
+          role="button"
+          tabIndex={0}
+          onClick={handleFreeClick}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleFreeClick();
+            }
+          }}
+          onPointerMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const dx = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2);
+            const dy = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2);
+            setMagOffset({ x: dx * 8, y: dy * 5 });
+          }}
+          onPointerLeave={() => setMagOffset({ x: 0, y: 0 })}
+          className="hero-card relative w-full rounded-[22px] px-7 py-6 flex flex-col items-center text-center cursor-pointer overflow-hidden"
+        >
+          <canvas
+            ref={cardStarsRef}
+            id="card-stars"
+            className="absolute inset-0 w-full h-full opacity-75 pointer-events-none"
+          />
+
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="mb-3 text-[#00D2FF] drop-shadow-[0_0_18px_rgba(0,210,255,0.65)]">
+              <svg
+                className="w-10 h-10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+              </svg>
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-semibold tracking-[-0.015em] text-white mb-1">
+              {t.chrono.heroTitle}
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300/90 mb-4">{t.chrono.heroSubtitle}</p>
+
+            <span
+              style={{
+                transform: `translate3d(${magOffset.x.toFixed(1)}px, ${magOffset.y.toFixed(1)}px, 0)`,
+                transition: "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+              }}
+              className="btn-press inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#00D2FF]/15 hover:bg-[#00D2FF]/25 border border-[#00D2FF]/75 text-[#00D2FF] text-xs sm:text-sm font-semibold shadow-[0_0_24px_rgba(0,210,255,0.28)]"
+            >
+              <span>{isEn ? "Explore the space →" : "Explorar el espacio →"}</span>
+            </span>
+          </div>
+        </div>
+
+        {/* BLOQUE OBLIGATORIO 1 — Search by Coordinates (HMS / DMS or Degrees) */}
+        <form
+          onSubmit={handleSearchSubmit}
+          className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#00D2FF] shadow-[0_0_8px_#00D2FF]" />
+              <h3 className="text-xs sm:text-sm font-semibold text-white tracking-tight">
+                {isEn
+                  ? "Search by Coordinates (HMS / DMS or Degrees)"
+                  : "Buscar por Coordenadas (HMS / DMS o Grados)"}
+              </h3>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleToggleCoordinateFormat}
+              disabled={!coordsValid}
+              title={
+                isEn
+                  ? "Convert between sexagesimal (HMS/DMS) and decimal degrees"
+                  : "Convertir entre sexagesimal (HMS/DMS) y grados decimales"
+              }
+              className="btn-press inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.05] hover:bg-[#00D2FF]/15 border border-white/10 hover:border-[#00D2FF]/50 text-[11px] font-mono text-[#00D2FF] disabled:opacity-40 cursor-pointer"
+            >
+              <ArrowLeftRight className="w-3 h-3" />
+              <span>HMS/DMS ⇄ DEG</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <label htmlFor="gate-ra-input" className="font-mono text-slate-300 font-medium">
+                  RA <span className="text-slate-500">(00h 00m 00.0s | 0.0000°)</span>
+                </label>
+                {raDeg !== null ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                )}
+              </div>
+              <input
+                id="gate-ra-input"
+                type="text"
+                required
+                value={raInput}
+                onChange={(e) => {
+                  setRaInput(e.target.value);
+                  setCoordError(null);
+                }}
+                placeholder="00h 00m 00.0s / 0.0000°"
+                className={`w-full rounded-xl bg-black/50 border px-3 py-2 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
+                  isTypingTelemetry
+                    ? "border-[#00D2FF] text-[#00D2FF] shadow-[0_0_14px_rgba(0,210,255,0.25)]"
+                    : raDeg !== null
+                      ? "border-white/15 focus:border-[#00D2FF]"
+                      : "border-amber-400/60 focus:border-amber-400"
+                }`}
+              />
+              <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between px-0.5">
+                {raDeg !== null ? (
+                  <>
+                    <span>{formatRAtoHMS(raDeg)}</span>
+                    <span className="text-[#00D2FF]">{raDeg.toFixed(4)}°</span>
+                  </>
+                ) : (
+                  <span className="text-amber-300/90">
+                    {isEn ? "Invalid RA format" : "Formato RA inválido"}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <label htmlFor="gate-dec-input" className="font-mono text-slate-300 font-medium">
+                  Dec <span className="text-slate-500">(+00° 00&apos; 00&quot; | +0.0000°)</span>
+                </label>
+                {decDeg !== null ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                )}
+              </div>
+              <input
+                id="gate-dec-input"
+                type="text"
+                required
+                value={decInput}
+                onChange={(e) => {
+                  setDecInput(e.target.value);
+                  setCoordError(null);
+                }}
+                placeholder="+00° 00' 00&quot; / +0.0000°"
+                className={`w-full rounded-xl bg-black/50 border px-3 py-2 text-xs sm:text-[13px] text-white placeholder-slate-500 font-mono focus:outline-none transition-colors ${
+                  isTypingTelemetry
+                    ? "border-[#00D2FF] text-[#00D2FF] shadow-[0_0_14px_rgba(0,210,255,0.25)]"
+                    : decDeg !== null
+                      ? "border-white/15 focus:border-[#00D2FF]"
+                      : "border-amber-400/60 focus:border-amber-400"
+                }`}
+              />
+              <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between px-0.5">
+                {decDeg !== null ? (
+                  <>
+                    <span>{formatDectoDMS(decDeg)}</span>
+                    <span className="text-[#00D2FF]">
+                      {decDeg >= 0 ? "+" : ""}
+                      {decDeg.toFixed(4)}°
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-amber-300/90">
+                    {isEn ? "Invalid Dec format" : "Formato Dec inválido"}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {coordError && (
+            <div className="rounded-xl bg-amber-500/10 border border-amber-400/40 px-3 py-1.5 text-[11px] text-amber-200 flex items-center gap-2">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>{coordError}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={warping || loading}
+            className="btn-press w-full py-2.5 px-4 rounded-xl bg-[#00D2FF]/20 hover:bg-[#00D2FF]/30 border border-[#00D2FF]/75 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_0_24px_rgba(0,210,255,0.22)] cursor-pointer disabled:opacity-50"
+          >
+            {warping || loading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[#00D2FF]" />
+            ) : (
+              <Search className="w-4 h-4 text-[#00D2FF]" />
+            )}
+            <span>{isEn ? "Search" : "Buscar"}</span>
+            {coordsValid && (
+              <span className="font-mono text-[11px] text-[#00D2FF] ml-1">
+                ({raDeg.toFixed(2)}°, {decDeg >= 0 ? "+" : ""}
+                {decDeg.toFixed(2)}°)
+              </span>
+            )}
+          </button>
+        </form>
+
+        {/* BLOQUE OBLIGATORIO 2 — Search by Celestial Body */}
+        <div
+          ref={dropdownRef}
+          className="glass-panel rounded-[20px] p-4 sm:p-5 border border-white/12 space-y-2.5 relative"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
+              <h3 className="text-xs sm:text-sm font-semibold text-white tracking-tight">
+                {isEn
+                  ? "Search by Celestial Body (Type Name or Select Known Object)"
+                  : "Buscar por Cuerpo Celeste (Escribí un Nombre o Elegí un Objeto)"}
+              </h3>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setDropdownOpen((v) => !v)}
+            aria-expanded={dropdownOpen}
+            className="btn-press w-full rounded-xl bg-black/55 hover:bg-black/70 border border-white/15 hover:border-[#00D2FF]/60 px-3.5 py-2.5 flex items-center justify-between gap-2 text-left cursor-pointer"
+          >
+            {selectedTargetId === "custom" ? (
+              <div className="flex items-center gap-2.5 min-w-0">
+                <PencilLine className="w-4 h-4 text-[#00D2FF] shrink-0" />
+                <span className="text-xs sm:text-sm font-medium text-white truncate">
+                  {customResolved
+                    ? customResolved.canonicalName
+                    : isEn
+                      ? "Type a name..."
+                      : "Escribir un nombre..."}
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-[#00D2FF]/15 border border-[#00D2FF]/45 text-[10px] font-mono text-[#00D2FF] shrink-0">
+                  Custom Input
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between w-full min-w-0 pr-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2 h-2 rounded-full bg-[#00D2FF] shrink-0" />
+                  <span className="text-xs sm:text-sm font-semibold text-white truncate">
+                    {activeKnownTarget?.label}
+                  </span>
+                  <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
+                    — {isEn ? activeKnownTarget?.subtitleEn : activeKnownTarget?.subtitleEs}
+                  </span>
+                </div>
+                <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
+                  ({activeKnownTarget?.shortCoords})
+                </span>
+              </div>
+            )}
+            <ChevronDown
+              className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
+                dropdownOpen ? "rotate-180 text-[#00D2FF]" : ""
+              }`}
+            />
+          </button>
+
+          {selectedTargetId === "custom" && (
+            <form onSubmit={handleResolveCustomName} className="pt-1 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  ref={customNameInputRef}
+                  type="text"
+                  value={customQuery}
+                  onChange={(e) => setCustomQuery(e.target.value)}
+                  placeholder={
+                    isEn
+                      ? "Type any star, brown dwarf, nebula or galaxy (e.g. Vega, M101, Sirius)..."
+                      : "Escribí cualquier estrella, enana marrón o galaxia (ej. Vega, M101, Sirius)..."
+                  }
+                  className="w-full rounded-xl bg-black/60 border border-[#00D2FF]/50 px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#00D2FF]"
+                />
+                <button
+                  type="submit"
+                  disabled={resolvingCustom || !customQuery.trim()}
+                  className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-[#00D2FF]/20 hover:bg-[#00D2FF]/30 border border-[#00D2FF]/60 text-xs font-semibold text-[#00D2FF] cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {resolvingCustom ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>{isEn ? "Resolve" : "Resolver"}</span>
+                  )}
+                </button>
+              </div>
+              {customResolved && (
+                <div className="rounded-xl bg-[#00D2FF]/10 border border-[#00D2FF]/35 px-3 py-1.5 text-[11px] flex items-center justify-between text-slate-200">
+                  <span className="truncate">
+                    <strong className="text-white font-mono">{customResolved.canonicalName}</strong>{" "}
+                    <span className="text-slate-400">({customResolved.otype})</span>
+                  </span>
+                  <span className="font-mono text-[10px] text-[#00D2FF] shrink-0 ml-2">
+                    {customResolved.resolverSource}
+                  </span>
+                </div>
+              )}
+              {customError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-400/40 px-3 py-1.5 text-[11px] text-rose-200">
+                  {customError}
+                </div>
+              )}
+            </form>
+          )}
+
+          {dropdownOpen && (
+            <div className="mt-1 rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] overflow-hidden divide-y divide-white/10">
+              <button
+                type="button"
+                onClick={handlePickCustomOption}
+                className={`w-full px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
+                  selectedTargetId === "custom"
+                    ? "bg-[#00D2FF]/15 text-white"
+                    : "hover:bg-white/[0.06] text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-2.5 text-xs sm:text-[13px] font-medium">
+                  <span aria-hidden="true">✏️</span>
+                  <span>{isEn ? "Type a name..." : "Escribir un nombre..."}</span>
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-[#00D2FF]/20 border border-[#00D2FF]/50 text-[10px] font-mono text-[#00D2FF] font-semibold">
+                  Custom Input
+                </span>
+              </button>
+
+              {GATE_KNOWN_TARGETS.map((item) => {
+                const active = selectedTargetId === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handlePickKnownTarget(item)}
+                    className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
+                      active
+                        ? "bg-[#00D2FF]/15 text-white"
+                        : "hover:bg-white/[0.06] text-slate-200"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs sm:text-[13px] font-semibold text-white">
+                          {item.label}
+                        </span>
+                        <span className="font-mono text-[11px] text-[#00D2FF]">
+                          ({item.shortCoords})
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {isEn ? item.subtitleEn : item.subtitleEs}
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                      {active ? "✓" : "→"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SpaceGate;

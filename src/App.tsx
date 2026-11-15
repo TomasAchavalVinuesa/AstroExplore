@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import {
   ControlsPanel,
   type MoleculeSignature,
 } from "./components/ControlsPanel";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { ObservationsPanel } from "./components/ObservationsPanel";
+import {
+  CosmicBackground,
+  SpaceGate,
+  type CosmicBackgroundHandle,
+} from "./components/SpaceGate";
 import { ViewerPanel } from "./components/ViewerPanel";
 import { parseDec, parseRA } from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
@@ -66,8 +71,9 @@ export default function App() {
   const [activeMolecules, setActiveMolecules] = useState<Set<string>>(new Set());
   const [externalChannelIdx, setExternalChannelIdx] = useState<number | null>(null);
 
-  const galaxyCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cardStarsRef = useRef<HTMLCanvasElement | null>(null);
+  const cosmicBgRef = useRef<CosmicBackgroundHandle | null>(null);
+  const [cursorSky, setCursorSky] = useState<{ ra: number; dec: number } | null>(null);
+  const [warping, setWarping] = useState(false);
 
   const [raInput, setRaInput] = useState("08h55m10.831s");
   const [decInput, setDecInput] = useState("-7d14m42.53s");
@@ -110,96 +116,6 @@ export default function App() {
     kind: "invalidTarget" | "invalidCoords";
     value: string;
   } | null>(null);
-
-  // Draw background galaxy & hero card starfield (from chrono_spherex_app.html)
-  useEffect(() => {
-    const drawGalaxyBackground = () => {
-      const canvas = galaxyCanvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      const w = canvas.width;
-      const h = canvas.height;
-
-      ctx.fillStyle = "#080B10";
-      ctx.fillRect(0, 0, w, h);
-
-      // Soft diagonal galactic band
-      const grad = ctx.createLinearGradient(0, 0, w, h);
-      grad.addColorStop(0, "rgba(26, 48, 86, 0.28)");
-      grad.addColorStop(0.5, "rgba(18, 30, 52, 0.14)");
-      grad.addColorStop(1, "rgba(88, 56, 36, 0.22)");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-
-      // Soft nebula glows
-      const glows: Array<[number, number, number, string]> = [
-        [w * 0.2, h * 0.25, w * 0.38, "rgba(42, 78, 130, 0.16)"],
-        [w * 0.78, h * 0.75, w * 0.4, "rgba(120, 74, 44, 0.14)"],
-        [w * 0.5, h * 0.5, w * 0.35, "rgba(0, 140, 180, 0.08)"],
-      ];
-      glows.forEach(([gx, gy, r, color]) => {
-        const rg = ctx.createRadialGradient(gx, gy, 0, gx, gy, r);
-        rg.addColorStop(0, color);
-        rg.addColorStop(1, "transparent");
-        ctx.fillStyle = rg;
-        ctx.fillRect(0, 0, w, h);
-      });
-
-      // Subtle stars
-      for (let i = 0; i < 240; i++) {
-        const x = (i * 7919) % w;
-        const y = (i * 6271) % h;
-        const r = i % 7 === 0 ? 1.4 : 0.8;
-        ctx.fillStyle = `rgba(226, 232, 240, ${0.18 + (i % 5) * 0.09})`;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    };
-
-    const drawCardStars = () => {
-      const c = cardStarsRef.current;
-      if (!c) return;
-      const ctx = c.getContext("2d");
-      if (!ctx) return;
-      c.width = c.offsetWidth || 460;
-      c.height = c.offsetHeight || 340;
-      const w = c.width;
-      const h = c.height;
-      ctx.clearRect(0, 0, w, h);
-
-      const rg = ctx.createRadialGradient(w * 0.35, h * 0.35, 10, w * 0.5, h * 0.5, w * 0.7);
-      rg.addColorStop(0, "rgba(0, 210, 255, 0.12)");
-      rg.addColorStop(0.5, "rgba(110, 72, 48, 0.10)");
-      rg.addColorStop(1, "transparent");
-      ctx.fillStyle = rg;
-      ctx.fillRect(0, 0, w, h);
-
-      for (let i = 0; i < 160; i++) {
-        const x = (i * 104729) % w;
-        const y = (i * 32452843) % h;
-        const r = i % 9 === 0 ? 1.5 : 0.7;
-        ctx.fillStyle = `rgba(255, 255, 255, ${0.25 + (i % 6) * 0.11})`;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    };
-
-    drawGalaxyBackground();
-    drawCardStars();
-
-    const onResize = () => {
-      drawGalaxyBackground();
-      drawCardStars();
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
 
   const status = useMemo(() => {
     if (!statusState) return null;
@@ -604,8 +520,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [urlErrorModal]);
 
-  // Launch from Screen 1 (Entry) -> Screen 2 (Loading) -> Screen 3 (Explorer)
+  // Launch from Screen 1 (Entry) -> Warp + Screen 2 (Loading) -> Screen 3 (Explorer)
   const launchExplorer = useCallback(async () => {
+    setWarping(true);
+    const raDeg = parseRA(raInput);
+    const decDeg = parseDec(decInput);
+    const warpTarget = raDeg !== null && decDeg !== null ? { ra: raDeg, dec: decDeg } : null;
+    const warpPromise = cosmicBgRef.current?.warpTo(warpTarget, 1200) ?? Promise.resolve();
+
     setCurrentScreen("loading");
     setLoadingProgress(25);
 
@@ -615,20 +537,87 @@ export default function App() {
 
     const stepTimer = window.setTimeout(() => {
       setLoadingProgress(85);
-    }, 260);
+    }, 320);
 
-    await Promise.race([
-      searchPromise,
-      new Promise((resolve) => window.setTimeout(resolve, 1400)),
+    await Promise.all([
+      warpPromise,
+      Promise.race([
+        searchPromise,
+        new Promise((resolve) => window.setTimeout(resolve, 1400)),
+      ]),
     ]);
 
     window.clearTimeout(stepTimer);
     setLoadingProgress(100);
+    setWarping(false);
 
     window.setTimeout(() => {
       setCurrentScreen("explorer");
-    }, 240);
+    }, 200);
   }, [versions, executeSearch, raInput, decInput, collectionMode, band, radius, size]);
+
+  const launchToCoords = useCallback(
+    async (params: {
+      ra: string;
+      dec: string;
+      raDeg: number;
+      decDeg: number;
+      targetLabel?: string;
+      preset?: TargetPreset | null;
+      resolved?: ResolvedCelestialObject | null;
+    }) => {
+      setWarping(true);
+      const nextCollection = params.preset?.collection ?? collectionMode;
+      setRaInput(params.ra);
+      setDecInput(params.dec);
+      setActivePresetId(params.preset?.id ?? null);
+      setResolvedObject(params.resolved ?? null);
+      setTargetName(
+        params.targetLabel ?? params.preset?.label ?? t.chrono.customSkyPatch
+      );
+      if (params.preset?.collection) {
+        setCollectionMode(params.preset.collection);
+      }
+      setSecondMapOpen(true);
+
+      const warpPromise =
+        cosmicBgRef.current?.warpTo({ ra: params.raDeg, dec: params.decDeg }, 1200) ??
+        Promise.resolve();
+
+      setCurrentScreen("loading");
+      setLoadingProgress(25);
+
+      const searchPromise = executeSearch(
+        params.ra,
+        params.dec,
+        nextCollection,
+        band,
+        radius,
+        size
+      );
+
+      const stepTimer = window.setTimeout(() => {
+        setLoadingProgress(85);
+      }, 320);
+
+      await Promise.all([
+        warpPromise,
+        Promise.race([
+          searchPromise,
+          new Promise((resolve) => window.setTimeout(resolve, 1400)),
+        ]),
+      ]);
+
+      window.clearTimeout(stepTimer);
+      setLoadingProgress(100);
+      setWarping(false);
+
+      window.setTimeout(() => {
+        setCurrentScreen("explorer");
+      }, 200);
+    },
+    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -804,12 +793,30 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#080B10] text-slate-100 select-none">
-      {/* Background Dimmed Galaxy Canvas */}
-      <canvas ref={galaxyCanvasRef} id="galaxy-bg" />
+      {/* Interactive 3D Galaxy + Starfield + Celestial Graticule Canvas */}
+      <CosmicBackground
+        ref={cosmicBgRef}
+        mode={currentScreen === "explorer" ? "explorer" : "gate"}
+        onCursorSky={setCursorSky}
+      />
 
-      {/* Top-Left Sidebar Toggle Pill (Explorer only) */}
+      {/* Top-Left Back & Sidebar Toggle Pills (Explorer only) */}
       {currentScreen === "explorer" && (
-        <div className="fixed top-6 left-5 sm:left-7 z-30">
+        <div className="fixed top-6 left-5 sm:left-7 z-30 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setSidebarOpen(false);
+              setCurrentScreen("entry");
+            }}
+            aria-label={t.chrono.backButton}
+            title={t.chrono.backButton}
+            className="btn-press glass-panel rounded-full px-3.5 py-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-200 hover:text-white hover:border-[#00D2FF]/45 cursor-pointer transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#00D2FF]" />
+            <span>{t.chrono.backButton}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setSidebarOpen((open) => !open)}
@@ -838,67 +845,26 @@ export default function App() {
       </div>
 
       {/* ===================================================================== */}
-      {/* SCREEN 1: ENTRY (Explore the space + Free Navigation Hero Card)       */}
+      {/* SCREEN 1: ENTRY (SpaceGate — 3D + HUD + 3 Interactive Blocks)         */}
       {/* ===================================================================== */}
       <section
         id="screen-entry"
         className={`screen ${
           currentScreen === "entry" ? "is-active" : "is-hidden"
-        } flex-col items-center justify-center px-6`}
+        } flex-col items-center justify-center`}
       >
-        <h1 className="text-4xl sm:text-5xl font-bold tracking-[-0.025em] text-white mb-9 text-center">
-          {t.chrono.entryTitle}
-        </h1>
-
-        <div
-          id="hero-start-card"
-          role="button"
-          tabIndex={0}
-          onClick={() => void launchExplorer()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              void launchExplorer();
-            }
-          }}
-          className="hero-card relative w-full max-w-[460px] rounded-[24px] p-10 flex flex-col items-center text-center cursor-pointer overflow-hidden"
-        >
-          {/* Subtle inner starfield shimmer inside card */}
-          <canvas
-            ref={cardStarsRef}
-            id="card-stars"
-            className="absolute inset-0 w-full h-full opacity-75 pointer-events-none"
-          />
-
-          <div className="relative z-10 flex flex-col items-center">
-            {/* Rocket Icon */}
-            <div className="mb-5 text-[#00D2FF] drop-shadow-[0_0_16px_rgba(0,210,255,0.55)]">
-              <svg
-                className="w-12 h-12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
-                <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
-                <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
-                <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
-              </svg>
-            </div>
-
-            <h2 className="text-2xl sm:text-[28px] font-semibold tracking-[-0.015em] text-white mb-1.5">
-              {t.chrono.heroTitle}
-            </h2>
-            <p className="text-sm text-slate-300/90 mb-7">{t.chrono.heroSubtitle}</p>
-
-            <span className="btn-press inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#00D2FF]/15 border border-[#00D2FF]/70 text-[#00D2FF] text-sm font-medium shadow-[0_0_24px_rgba(0,210,255,0.22)]">
-              {t.chrono.heroCta}
-            </span>
-          </div>
-        </div>
+        <SpaceGate
+          raInput={raInput}
+          setRaInput={setRaInput}
+          decInput={decInput}
+          setDecInput={setDecInput}
+          cursorSky={cursorSky}
+          warping={warping}
+          loading={loading}
+          withBackground={false}
+          onExploreFree={() => void launchExplorer()}
+          onLaunchToCoords={(params) => void launchToCoords(params)}
+        />
       </section>
 
       {/* ===================================================================== */}
