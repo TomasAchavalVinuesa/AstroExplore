@@ -22,6 +22,7 @@ import {
   parseRA as baseParseRA,
 } from "../lib/coordinates";
 import { useLanguage } from "../i18n/LanguageContext";
+import { CursorAudioEngine } from "../lib/cursorAudio";
 import type {
   CollectionQueryMode,
   ResolvedCelestialObject,
@@ -84,6 +85,7 @@ export interface CosmicBackgroundHandle {
 
 export interface CosmicBackgroundProps {
   mode?: "gate" | "explorer";
+  cursorAudio?: boolean;
   onCursorSky?: (sky: { ra: number; dec: number } | null) => void;
 }
 
@@ -200,9 +202,11 @@ function viewToSky(
 }
 
 export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgroundProps>(
-  function CosmicBackground({ mode = "gate", onCursorSky }, ref) {
+  function CosmicBackground({ mode = "gate", cursorAudio = true, onCursorSky }, ref) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const modeRef = useRef(mode);
+    const cursorAudioRef = useRef(cursorAudio);
+    const audioEngineRef = useRef<CursorAudioEngine | null>(null);
     const onCursorSkyRef = useRef(onCursorSky);
     const warpRef = useRef<{
       start: number;
@@ -214,7 +218,14 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
     const viewRef = useRef({ ra0: 133.8, dec0: 12, sphereR: 1, cx: 0, cy: 0 });
 
     modeRef.current = mode;
+    cursorAudioRef.current = cursorAudio;
     onCursorSkyRef.current = onCursorSky;
+
+    useEffect(() => {
+      if (mode !== "gate" || !cursorAudio) {
+        audioEngineRef.current?.silence();
+      }
+    }, [mode, cursorAudio]);
 
     useImperativeHandle(ref, () => ({
       warpTo: (target, durationMs = 1200) =>
@@ -280,19 +291,61 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
       resize();
       window.addEventListener("resize", resize);
 
+      const audioEngine = new CursorAudioEngine();
+      audioEngineRef.current = audioEngine;
+
       const mouse = { x: w / 2, y: h / 2, sx: w / 2, sy: h / 2, inside: false, moved: true };
+      let lastMoveX = w / 2;
+      let lastMoveY = h / 2;
+      let lastMoveTime = performance.now();
+      let instantSpeed = 0;
+      let smoothedSpeed = 0;
+
+      const tryUnlockAudio = () => {
+        if (modeRef.current === "gate" && cursorAudioRef.current) {
+          audioEngine.unlock();
+        }
+      };
+
       const onMove = (e: PointerEvent) => {
+        const now = performance.now();
+        if (!mouse.inside) {
+          lastMoveX = e.clientX;
+          lastMoveY = e.clientY;
+          lastMoveTime = now;
+          instantSpeed = 0;
+        } else {
+          const dtMs = Math.max(4, now - lastMoveTime);
+          const dist = Math.hypot(e.clientX - lastMoveX, e.clientY - lastMoveY);
+          instantSpeed = Math.min(8, dist / dtMs);
+          lastMoveX = e.clientX;
+          lastMoveY = e.clientY;
+          lastMoveTime = now;
+        }
         mouse.x = e.clientX;
         mouse.y = e.clientY;
         mouse.inside = true;
         mouse.moved = true;
+        tryUnlockAudio();
       };
       const onLeave = () => {
         mouse.inside = false;
         mouse.moved = true;
+        instantSpeed = 0;
+        smoothedSpeed = 0;
+        audioEngine.silence();
         onCursorSkyRef.current?.(null);
       };
+      const onVisibilityOrBlur = () => {
+        instantSpeed = 0;
+        smoothedSpeed = 0;
+        audioEngine.silence();
+      };
       window.addEventListener("pointermove", onMove, { passive: true });
+      window.addEventListener("pointerdown", tryUnlockAudio, { passive: true });
+      window.addEventListener("keydown", tryUnlockAudio, { passive: true });
+      window.addEventListener("blur", onVisibilityOrBlur);
+      document.addEventListener("visibilitychange", onVisibilityOrBlur);
       document.addEventListener("pointerleave", onLeave);
 
       let dim = modeRef.current === "explorer" ? 1 : 0;
@@ -364,6 +417,22 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
 
         const targetDim = modeRef.current === "explorer" ? 1 : 0;
         dim += (targetDim - dim) * Math.min(1, dt * 3);
+
+        const audioActive = modeRef.current === "gate" && cursorAudioRef.current && mouse.inside;
+        if (!audioActive) {
+          instantSpeed = 0;
+          smoothedSpeed = 0;
+          audioEngine.silence();
+        } else {
+          if (now - lastMoveTime > 70) {
+            instantSpeed *= Math.exp(-dt * 14);
+            if (instantSpeed < 0.005) instantSpeed = 0;
+          }
+          const smoothRate = instantSpeed > smoothedSpeed ? 18 : 10;
+          smoothedSpeed += (instantSpeed - smoothedSpeed) * Math.min(1, dt * smoothRate);
+          audioEngine.update(smoothedSpeed, true);
+        }
+
         if (dim > 0.97 && !warpRef.current && frame % 2 === 1) return;
 
         let warp = 0;
@@ -533,8 +602,14 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
         cancelAnimationFrame(raf);
         window.removeEventListener("resize", resize);
         window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerdown", tryUnlockAudio);
+        window.removeEventListener("keydown", tryUnlockAudio);
+        window.removeEventListener("blur", onVisibilityOrBlur);
+        document.removeEventListener("visibilitychange", onVisibilityOrBlur);
         document.removeEventListener("pointerleave", onLeave);
         reducedMq.removeEventListener("change", onReducedChange);
+        audioEngine.dispose();
+        audioEngineRef.current = null;
         warpRef.current?.resolve?.();
       };
     }, []);

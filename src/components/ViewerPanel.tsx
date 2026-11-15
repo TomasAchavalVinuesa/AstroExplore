@@ -7,6 +7,7 @@ import {
   Calendar,
   Check,
   ChevronDown,
+  Dna,
   Download,
   FileDown,
   FlaskConical,
@@ -19,6 +20,7 @@ import {
   Minimize2,
   Minus,
   Move,
+  Orbit,
   Play,
   Plus,
   SkipBack,
@@ -75,6 +77,7 @@ interface ViewerPanelProps {
   activeMap2TabId: string;
   onSelectMap2Tab: (tabId: string) => void;
   onCloseMap2Tab: (tabId: string) => void;
+  onRenameMap2Tab?: (tabId: string, newLabel: string) => void;
   selectedObs: SpherexObservation | null;
   cutout: RenderedCutout | null;
   cutoutLoading: boolean;
@@ -106,6 +109,7 @@ interface Map2TabPanelProps {
   isActive: boolean;
   selectedObs: SpherexObservation | null;
   cutout: RenderedCutout | null;
+  loading: boolean;
   cutoutLoading: boolean;
   lastCoords: { ra: number; dec: number; size: number } | null;
   targetName?: string;
@@ -157,6 +161,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
   isActive,
   selectedObs,
   cutout,
+  loading,
   cutoutLoading,
   lastCoords,
   targetName = "WISE 0855",
@@ -1254,7 +1259,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                     {selectedObs.bandpass}
                   </span>
                 )}
-                {(cutoutLoading || isPreloadingAll) && (
+                {(loading || cutoutLoading || isPreloadingAll) && (
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00D2FF] shrink-0" />
                 )}
                 <ChevronDown
@@ -1889,6 +1894,40 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                           </div>
 
                           {!isScanningBands && roiAnalysis && (
+                            <div className="space-y-1.5 pt-0.5">
+                              {roiAnalysis.celestialClassification?.topCandidate && (
+                                <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-xl bg-[#00D2FF]/10 border border-[#00D2FF]/35 text-[11px]">
+                                  <span className="flex items-center gap-1.5 min-w-0 text-slate-100">
+                                    <Orbit className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
+                                    <span className="truncate">
+                                      {isEn
+                                        ? roiAnalysis.celestialClassification.topCandidate.nameEn
+                                        : roiAnalysis.celestialClassification.topCandidate.nameEs}
+                                    </span>
+                                  </span>
+                                  <span className="font-mono font-semibold text-[#00D2FF] shrink-0">
+                                    {roiAnalysis.celestialClassification.topCandidate.probabilityPct.toFixed(0)}%
+                                  </span>
+                                </div>
+                              )}
+                              {roiAnalysis.habitability?.probabilityPct !== null &&
+                                roiAnalysis.habitability?.probabilityPct !== undefined && (
+                                  <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-400/35 text-[11px]">
+                                    <span className="flex items-center gap-1.5 min-w-0 text-slate-100">
+                                      <Dna className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                                      <span className="truncate">
+                                        {isEn ? "Life / Habitability" : "Vida / Habitabilidad"}
+                                      </span>
+                                    </span>
+                                    <span className="font-mono font-semibold text-emerald-300 shrink-0">
+                                      {roiAnalysis.habitability.probabilityPct.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                )}
+                            </div>
+                          )}
+
+                          {!isScanningBands && roiAnalysis && (
                             savedCurrentRoiId ? (
                               <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-400/30 rounded-xl px-2.5 py-1">
                                 <Check className="w-3.5 h-3.5 shrink-0" />
@@ -2007,10 +2046,19 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                       </div>
                     )}
                   </div>
-                ) : cutoutLoading ? (
-                  <div className="flex flex-col items-center justify-center gap-2 text-slate-300">
+                ) : loading || cutoutLoading ? (
+                  <div className="flex flex-col items-center justify-center gap-2.5 p-6 text-center text-slate-300">
                     <Loader2 className="w-7 h-7 animate-spin text-[#00D2FF]" />
-                    <span className="text-xs">{status?.text ?? t.epochPlayer.loadingFrame}</span>
+                    <p className="text-xs font-medium text-slate-200">
+                      {loading
+                        ? status?.text ?? t.viewer.queryingApiTitle
+                        : status?.text ?? t.epochPlayer.loadingFrame}
+                    </p>
+                    {loading && (
+                      <p className="text-[11px] text-slate-400 max-w-xs">
+                        {t.viewer.queryingApiSubtitle}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
@@ -2337,6 +2385,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   activeMap2TabId,
   onSelectMap2Tab,
   onCloseMap2Tab,
+  onRenameMap2Tab,
   selectedObs,
   cutout,
   cutoutLoading,
@@ -2359,6 +2408,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 }) => {
   const { language } = useLanguage();
   const isEn = language === "en";
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editingTabLabel, setEditingTabLabel] = useState<string>("");
   const [savedReadings, setSavedReadings] = useState<SavedRoiReading[]>(() =>
     loadSavedRoiReadings()
   );
@@ -2391,7 +2442,10 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   }, []);
 
   const activeVersionData = versions ? versions[activeCollection] : null;
-  const observations = activeVersionData?.observations ?? [];
+  const observations = React.useMemo(
+    () => activeVersionData?.observations ?? [],
+    [activeVersionData?.observations]
+  );
 
   return (
     <main className="flex-1 flex flex-col gap-4 min-h-0 min-w-0">
@@ -2445,14 +2499,31 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 const isTabActive = tab.id === activeMap2TabId;
                 const isBusy = tab.loading || tab.cutoutLoading;
                 const hasError = Boolean(tab.status?.isError);
+                const isEditing = editingTabId === tab.id;
+                const commitRename = () => {
+                  const trimmed = editingTabLabel.trim();
+                  if (trimmed && trimmed !== tab.label) {
+                    onRenameMap2Tab?.(tab.id, trimmed);
+                  }
+                  setEditingTabId(null);
+                };
                 return (
                   <div
                     key={tab.id}
-                    onClick={() => onSelectMap2Tab(tab.id)}
+                    onClick={() => {
+                      if (!isEditing) onSelectMap2Tab(tab.id);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setEditingTabId(tab.id);
+                      setEditingTabLabel(tab.label);
+                    }}
                     role="tab"
                     aria-selected={isTabActive}
                     tabIndex={0}
+                    title={isEn ? "Double-click to rename tab" : "Doble clic para renombrar pestaña"}
                     onKeyDown={(e) => {
+                      if (isEditing) return;
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         onSelectMap2Tab(tab.id);
@@ -2477,7 +2548,31 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         }`}
                       />
                     )}
-                    <span className="truncate">{tab.label}</span>
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editingTabLabel}
+                        onChange={(e) => setEditingTabLabel(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            commitRename();
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setEditingTabId(null);
+                          }
+                        }}
+                        aria-label={isEn ? "Rename tab" : "Renombrar pestaña"}
+                        className="w-28 bg-black/60 border border-[#00D2FF]/70 rounded px-1.5 py-0 text-xs font-mono text-white focus:outline-none"
+                      />
+                    ) : (
+                      <span className="truncate">{tab.label}</span>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -2506,6 +2601,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 isActive={tab.id === activeMap2TabId}
                 selectedObs={tabSelectedObs}
                 cutout={tab.cutout}
+                loading={tab.loading}
                 cutoutLoading={tab.cutoutLoading}
                 lastCoords={tab.lastCoords}
                 targetName={tab.targetName}
