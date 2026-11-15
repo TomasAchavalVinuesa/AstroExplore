@@ -15,8 +15,8 @@ import { mjdToUtc } from "./coordinates";
 
 const IRSA_ORIGIN = "https://irsa.ipac.caltech.edu";
 const FITS_CACHE_NAME = "spherex-fits-v1";
-const MAX_CONCURRENT_HIGH_DOWNLOADS = 2;
-const MAX_CONCURRENT_TOTAL_DOWNLOADS = 2;
+const MAX_CONCURRENT_HIGH_DOWNLOADS = 3;
+const MAX_CONCURRENT_TOTAL_DOWNLOADS = 6;
 const SIA_TIMEOUT_MS = 60_000;
 const FITS_TIMEOUT_MS = 180_000;
 const MAX_RETRY_ATTEMPTS = 3;
@@ -503,8 +503,8 @@ function drainDownloadQueue(): void {
       continue;
     }
 
-    // 2. Solo despachar tareas de baja prioridad (galería/épocas/prefetch) si no hay tareas "high" activas ni en espera
-    if (highIdx === -1 && activeHighDownloads === 0 && activeLowDownloads < 1) {
+    // 2. Solo despachar tareas de baja prioridad (galería/épocas/escaneo) si no hay tareas "high" activas ni en espera
+    if (highIdx === -1 && activeHighDownloads === 0 && activeLowDownloads < 5) {
       const [task] = downloadQueue.splice(0, 1);
       activeLowDownloads++;
       task.run();
@@ -660,6 +660,7 @@ export async function getRenderedCutout(options: {
   colormap: ColormapName;
   subtractZodi: boolean;
   priority?: RequestPriority;
+  skipRender?: boolean;
   signal?: AbortSignal;
 }): Promise<RenderedCutout> {
   const {
@@ -671,6 +672,7 @@ export async function getRenderedCutout(options: {
     colormap,
     subtractZodi,
     priority = "high",
+    skipRender = false,
     signal,
   } = options;
 
@@ -689,6 +691,7 @@ export async function getRenderedCutout(options: {
       colormap,
       subtractZodi,
       fitsCutoutUrl: officialCutoutUrl,
+      skipRender,
     },
     signal
   );

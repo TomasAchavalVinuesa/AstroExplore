@@ -1063,6 +1063,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onPointerLeave={() => setCursorCoords(null)}
         onDoubleClick={handleDoubleClick}
         className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
       />
@@ -1091,6 +1092,15 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
               </button>
             )}
           </div>
+
+          {cursorCoords && (
+            <div className="glass-panel absolute top-12 left-3 z-10 rounded-full px-2.5 py-1 flex items-center gap-1.5 text-[10px] font-mono text-slate-100 pointer-events-none border-[#00D2FF]/40 max-w-[calc(100%-1.5rem)] truncate">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399] shrink-0" />
+              <span className="truncate">
+                RA {formatRAtoHMS(cursorCoords.ra)} · Dec {formatDectoDMS(cursorCoords.dec)}
+              </span>
+            </div>
+          )}
 
           {/* Compact Bottom Bar: FITS sections & Zoom/Refit */}
           <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-1.5 pointer-events-none">
@@ -1161,6 +1171,15 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
               RA {formatRAtoHMS(readoutRa)} · Dec {formatDectoDMS(readoutDec)}
             </span>
           </div>
+
+          {cursorCoords && (
+            <div className="glass-panel absolute top-14 left-4 z-10 rounded-full px-3.5 py-1 flex items-center gap-2 text-[11px] font-mono text-slate-100 pointer-events-none border-[#00D2FF]/40 max-w-[65%] truncate">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399] shrink-0" />
+              <span className="truncate">
+                RA {formatRAtoHMS(cursorCoords.ra)} · Dec {formatDectoDMS(cursorCoords.dec)}
+              </span>
+            </div>
+          )}
 
           {/* Top-Right Target Badge + Map Controls */}
           <div className="absolute top-4 right-4 flex items-center gap-2 flex-wrap justify-end max-w-[65%]">

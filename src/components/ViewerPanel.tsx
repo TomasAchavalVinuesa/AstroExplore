@@ -1,17 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  Bookmark,
+  BoxSelect,
   Calendar,
   Check,
   ChevronDown,
   Download,
   FileDown,
+  FlaskConical,
+  GitCompareArrows,
   Grid,
   Image as ImageIcon,
   Info,
   Loader2,
   Maximize2,
   Minus,
+  Move,
   Play,
   Plus,
   Sparkles,
@@ -22,6 +27,8 @@ import type {
   ColormapName,
   RenderedCutout,
   ResolvedCelestialObject,
+  SavedRoiReading,
+  SkyRoiSelection,
   SpherexCollectionId,
   SpherexObservation,
   StretchMode,
@@ -33,15 +40,22 @@ import {
   clampCutoutFov,
   computeAxisTicks,
   computeVisibleSkyPolygon,
+  formatDectoDMS,
+  formatRAtoHMS,
   getTargetImageFraction,
+  pixelToWorld,
+  worldToPixel,
 } from "../lib/coordinates";
 import { getRenderedCutout } from "../lib/irsa";
+import { deleteRoiReading, loadSavedRoiReadings, saveRoiReading } from "../lib/roiStorage";
+import { analyzeRoiChemistry, extractRoiSpectrumFromCutouts } from "../lib/spectralAnalysis";
 import { useLanguage } from "../i18n/LanguageContext";
 import { HipsSkyMapPanel } from "./HipsSkyMapPanel";
 import { MultiVersionGallery } from "./MultiVersionGallery";
 import { DetectorGuide } from "./DetectorGuide";
 import { SpectralProfile } from "./SpectralProfile";
 import { BlinkComparator } from "./BlinkComparator";
+import { RoiAnalysisModal } from "./RoiAnalysisModal";
 
 interface ViewerPanelProps {
   selectedObs: SpherexObservation | null;
@@ -103,6 +117,25 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const isEn = language === "en";
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDraggingCutout, setIsDraggingCutout] = useState<boolean>(false);
+  const [map2ToolMode, setMap2ToolMode] = useState<"pan" | "roi">("pan");
+  const [selectedRoi, setSelectedRoi] = useState<SkyRoiSelection | null>(null);
+  const [roiDraftBox, setRoiDraftBox] = useState<{
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  } | null>(null);
+  const [showRoiModal, setShowRoiModal] = useState<boolean>(false);
+  const [roiModalTab, setRoiModalTab] = useState<"current" | "compare">("current");
+  const [savedReadings, setSavedReadings] = useState<SavedRoiReading[]>(() =>
+    loadSavedRoiReadings()
+  );
+  const [savedCurrentRoiId, setSavedCurrentRoiId] = useState<string | null>(null);
+  const [floatingSaveName, setFloatingSaveName] = useState<string>("");
+  const [cutoutCursorCoords, setCutoutCursorCoords] = useState<{
+    ra: number;
+    dec: number;
+  } | null>(null);
   const [secondMapTab, setSecondMapTab] = useState<
     "cutout" | "bands" | "sed" | "blink" | "guide"
   >("cutout");
@@ -160,7 +193,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
   const cachedImages = useMemo(() => {
     const map = new Map<string, string>();
-    cachedCutoutsMap.forEach((v, k) => map.set(k, v.dataUrl));
+    cachedCutoutsMap.forEach((v, k) => {
+      if (v.dataUrl) map.set(k, v.dataUrl);
+    });
     return map;
   }, [cachedCutoutsMap]);
 
@@ -188,19 +223,52 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const targetRa = lastCoords?.ra;
   const targetDec = lastCoords?.dec;
 
+  const scanAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     setPanOffset({ x: 0, y: 0 });
+    setSelectedRoi(null);
+    setRoiDraftBox(null);
+    setShowRoiModal(false);
+    scanAbortRef.current?.abort();
   }, [targetRa, targetDec]);
+
+  const handleCancelScanBands = () => {
+    scanAbortRef.current?.abort();
+  };
 
   const handleScanAllBands = async () => {
     if (targetRa === undefined || targetDec === undefined || isScanningBands || observations.length === 0) return;
+    scanAbortRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+
     setIsScanningBands(true);
     let done = 0;
     const total = observations.length;
     setScanProgress({ current: 0, total });
 
+    // Filtrar primero observaciones pendientes; las ya cacheadas con fluxData suman de inmediato
+    const pending: SpherexObservation[] = [];
     for (const obs of observations) {
-      if (!cachedCutoutsMap.has(obs.obs_id)) {
+      const existing = cachedCutoutsMap.get(obs.obs_id);
+      if (existing && existing.fluxData) {
+        done++;
+      } else {
+        pending.push(obs);
+      }
+    }
+    if (done > 0) {
+      setScanProgress({ current: done, total });
+    }
+
+    // Pool paralelo de 5 descargas + decodificación en Web Worker sin renderizar PNG
+    const CONCURRENCY = 5;
+    let nextIdx = 0;
+
+    const runWorker = async () => {
+      while (nextIdx < pending.length && !controller.signal.aborted) {
+        const obs = pending[nextIdx++];
         try {
           const rendered = await getRenderedCutout({
             accessUrl: obs.access_url,
@@ -211,15 +279,27 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
             colormap,
             subtractZodi,
             priority: "low",
+            skipRender: true,
+            signal: controller.signal,
           });
           setCachedCutoutsMap((prev) => new Map(prev).set(obs.obs_id, rendered));
-        } catch {
-          // ignore individual timeout
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            break;
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            done++;
+            setScanProgress({ current: done, total });
+          }
         }
       }
-      done++;
-      setScanProgress({ current: done, total });
-    }
+    };
+
+    const workers = Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () =>
+      runWorker()
+    );
+    await Promise.all(workers);
     setIsScanningBands(false);
   };
 
@@ -643,7 +723,74 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     );
   }, [displayCutout, cutoutVisibleBounds]);
 
+  const roiAnalysis = useMemo(() => {
+    if (!selectedRoi) return null;
+    // Si la imagen seleccionada pertenece a una época con suficiente cobertura (±7 días),
+    // aislar esas observaciones para no mezclar posiciones de fechas distintas en objetos con movimiento propio.
+    let targetObs = observations;
+    if (selectedRoi.epochMjd !== null && selectedRoi.epochMjd !== undefined) {
+      const epochObs = observations.filter(
+        (o) => o.t_min !== null && Math.abs(o.t_min - selectedRoi.epochMjd!) <= 7
+      );
+      if (epochObs.length >= 10) {
+        targetObs = epochObs;
+      }
+    }
+    const pts = extractRoiSpectrumFromCutouts(selectedRoi, targetObs, cachedCutoutsMap);
+    return analyzeRoiChemistry(pts, pts.length);
+  }, [selectedRoi, observations, cachedCutoutsMap]);
+
+  const roiOverlayBox = useMemo(() => {
+    if (roiDraftBox) {
+      return {
+        xMin: Math.min(roiDraftBox.x0, roiDraftBox.x1),
+        xMax: Math.max(roiDraftBox.x0, roiDraftBox.x1),
+        yMin: Math.min(roiDraftBox.y0, roiDraftBox.y1),
+        yMax: Math.max(roiDraftBox.y0, roiDraftBox.y1),
+      };
+    }
+    if (!selectedRoi || !displayCutout?.wcs) return null;
+    const fracs: Array<{ x: number; y: number }> = [];
+    for (const c of selectedRoi.corners) {
+      const p = worldToPixel(c.ra, c.dec, displayCutout.wcs);
+      if (!p) continue;
+      fracs.push({
+        x: (p.px - 0.5) / displayCutout.width,
+        y: 1 - (p.py - 0.5) / displayCutout.height,
+      });
+    }
+    if (fracs.length < 3) return null;
+    return {
+      xMin: Math.min(...fracs.map((f) => f.x)),
+      xMax: Math.max(...fracs.map((f) => f.x)),
+      yMin: Math.min(...fracs.map((f) => f.y)),
+      yMax: Math.max(...fracs.map((f) => f.y)),
+    };
+  }, [roiDraftBox, selectedRoi, displayCutout]);
+
+  const clientToImageFraction = (clientX: number, clientY: number) => {
+    const frameEl = cutoutImageFrameRef.current;
+    if (!frameEl) return null;
+    const rect = frameEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const frameX = (clientX - rect.left) / rect.width;
+    const frameY = (clientY - rect.top) / rect.height;
+    const xFrac = Math.min(1, Math.max(0, cutoutViewCenter.cx + (frameX - 0.5) / totalCutoutScale));
+    const yFrac = Math.min(1, Math.max(0, cutoutViewCenter.cy + (frameY - 0.5) / totalCutoutScale));
+    return { xFrac, yFrac };
+  };
+
   const handleCutoutPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (map2ToolMode === "roi" && displayCutout?.wcs) {
+      // Solo se permite analizar de a 1 área a la vez mientras procesa
+      if (isScanningBands) return;
+      const pt = clientToImageFraction(e.clientX, e.clientY);
+      if (!pt) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setRoiDraftBox({ x0: pt.xFrac, y0: pt.yFrac, x1: pt.xFrac, y1: pt.yFrac });
+      return;
+    }
+
     if (!canPanCutout) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsDraggingCutout(true);
@@ -657,11 +804,37 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   };
 
   const handleCutoutPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!cutoutDragRef.current.dragging) return;
     const frameEl = cutoutImageFrameRef.current;
     if (!frameEl) return;
     const rect = frameEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
+
+    if (displayCutout?.wcs) {
+      const frameX = (e.clientX - rect.left) / rect.width;
+      const frameY = (e.clientY - rect.top) / rect.height;
+      const xFrac = cutoutViewCenter.cx + (frameX - 0.5) / totalCutoutScale;
+      const yFrac = cutoutViewCenter.cy + (frameY - 0.5) / totalCutoutScale;
+
+      if (xFrac >= 0 && xFrac <= 1 && yFrac >= 0 && yFrac <= 1) {
+        const px = xFrac * displayCutout.width + 0.5;
+        const py = (1 - yFrac) * displayCutout.height + 0.5;
+        setCutoutCursorCoords(pixelToWorld(px, py, displayCutout.wcs));
+      } else {
+        setCutoutCursorCoords(null);
+      }
+    } else {
+      setCutoutCursorCoords(null);
+    }
+
+    if (roiDraftBox) {
+      const pt = clientToImageFraction(e.clientX, e.clientY);
+      if (pt) {
+        setRoiDraftBox((prev) => (prev ? { ...prev, x1: pt.xFrac, y1: pt.yFrac } : null));
+      }
+      return;
+    }
+
+    if (!cutoutDragRef.current.dragging) return;
 
     const dxPx = e.clientX - cutoutDragRef.current.startX;
     const dyPx = e.clientY - cutoutDragRef.current.startY;
@@ -677,7 +850,62 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     });
   };
 
+  const handleCutoutPointerLeave = () => {
+    setCutoutCursorCoords(null);
+  };
+
   const handleCutoutPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (roiDraftBox) {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      const xMin = Math.min(roiDraftBox.x0, roiDraftBox.x1);
+      const xMax = Math.max(roiDraftBox.x0, roiDraftBox.x1);
+      const yMin = Math.min(roiDraftBox.y0, roiDraftBox.y1);
+      const yMax = Math.max(roiDraftBox.y0, roiDraftBox.y1);
+      setRoiDraftBox(null);
+
+      if (displayCutout?.wcs && xMax - xMin > 0.005 && yMax - yMin > 0.005) {
+        const w = displayCutout.width;
+        const h = displayCutout.height;
+        const toSky = (xf: number, yf: number) =>
+          pixelToWorld(xf * w + 0.5, (1 - yf) * h + 0.5, displayCutout.wcs!);
+
+        const corners = [
+          toSky(xMin, yMin),
+          toSky(xMax, yMin),
+          toSky(xMax, yMax),
+          toSky(xMin, yMax),
+        ];
+        const center = toSky((xMin + xMax) / 2, (yMin + yMax) / 2);
+        const topMid = toSky((xMin + xMax) / 2, yMin);
+        const botMid = toSky((xMin + xMax) / 2, yMax);
+        const leftMid = toSky(xMin, (yMin + yMax) / 2);
+        const rightMid = toSky(xMax, (yMin + yMax) / 2);
+        const cosDec = Math.max(0.1, Math.cos((center.dec * Math.PI) / 180));
+        const widthArcsec =
+          Math.hypot((rightMid.ra - leftMid.ra) * cosDec, rightMid.dec - leftMid.dec) * 3600;
+        const heightArcsec =
+          Math.hypot((botMid.ra - topMid.ra) * cosDec, botMid.dec - topMid.dec) * 3600;
+
+        setSelectedRoi({
+          corners,
+          centerRa: center.ra,
+          centerDec: center.dec,
+          widthArcsec: Number.isFinite(widthArcsec) ? widthArcsec : 0,
+          heightArcsec: Number.isFinite(heightArcsec) ? heightArcsec : 0,
+          epochDate: selectedObs?.epoch_date ?? null,
+          epochMjd: selectedObs?.t_min ?? null,
+        });
+        setSavedCurrentRoiId(null);
+        setFloatingSaveName("");
+        setShowRoiModal(false);
+        setMap2ToolMode("pan");
+        void handleScanAllBands();
+      }
+      return;
+    }
+
     if (cutoutDragRef.current.dragging) {
       cutoutDragRef.current.dragging = false;
       setIsDraggingCutout(false);
@@ -918,6 +1146,81 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
             {/* Top-Right Map 2 Controls & Close Button */}
             <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 flex-wrap justify-end">
+              {/* Tool Toggle: Pan vs Select Area (ROI) */}
+              {secondMapTab === "cutout" && displayCutout?.wcs && (
+                <div className="glass-panel rounded-full p-1 flex items-center gap-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setMap2ToolMode("pan")}
+                    className={`btn-press px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 transition-colors ${
+                      map2ToolMode === "pan"
+                        ? "bg-white/15 text-white font-semibold"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                    title={isEn ? "Pan / Move Map 2" : "Mover / Desplazar Mapa 2"}
+                  >
+                    <Move className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMap2ToolMode("roi")}
+                    disabled={isScanningBands}
+                    className={`btn-press px-2.5 py-1 rounded-full cursor-pointer flex items-center gap-1 transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                      map2ToolMode === "roi"
+                        ? "bg-emerald-500 text-slate-950 font-semibold"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                    title={
+                      isScanningBands
+                        ? isEn
+                          ? "Wait for the current area scan to finish"
+                          : "Esperá a que termine el procesamiento del área actual"
+                        : isEn
+                          ? "Select area on Map 2 to analyze infrared chemical composition"
+                          : "Seleccionar área en Mapa 2 para analizar composición química infrarroja"
+                    }
+                  >
+                    <BoxSelect className="w-3 h-3" />
+                    <span className="hidden sm:inline">
+                      {isEn ? "Area" : "Área"}
+                    </span>
+                  </button>
+                  {selectedRoi && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoiModalTab("current");
+                        setShowRoiModal(true);
+                      }}
+                      className="btn-press px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 text-emerald-300 hover:bg-emerald-500/20 border-l border-white/10 ml-0.5"
+                      title={
+                        isEn ? "Open ROI chemical analysis" : "Abrir análisis químico del área"
+                      }
+                    >
+                      <FlaskConical className="w-3 h-3" />
+                    </button>
+                  )}
+                  {savedReadings.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoiModalTab("compare");
+                        setShowRoiModal(true);
+                      }}
+                      className="btn-press px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 text-[#00D2FF] hover:bg-[#00D2FF]/15 border-l border-white/10 ml-0.5"
+                      title={
+                        isEn
+                          ? "Compare saved area readings"
+                          : "Comparar lecturas guardadas"
+                      }
+                    >
+                      <GitCompareArrows className="w-3 h-3" />
+                      <span className="font-mono text-[10px]">{savedReadings.length}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Map 2 Field of View (FOV) Controls */}
               <div className="glass-panel rounded-full px-2 py-1 flex items-center gap-1 text-[11px] text-slate-300">
                 <button
@@ -1024,12 +1327,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                     onPointerMove={handleCutoutPointerMove}
                     onPointerUp={handleCutoutPointerUp}
                     onPointerCancel={handleCutoutPointerUp}
+                    onPointerLeave={handleCutoutPointerLeave}
                     className={`relative border border-white/30 shadow-2xl touch-none ${
-                      canPanCutout
-                        ? isDraggingCutout
-                          ? "cursor-grabbing"
-                          : "cursor-grab"
-                        : "cursor-default"
+                      map2ToolMode === "roi"
+                        ? "cursor-crosshair"
+                        : canPanCutout
+                          ? isDraggingCutout
+                            ? "cursor-grabbing"
+                            : "cursor-grab"
+                          : "cursor-default"
                     }`}
                     style={{
                       aspectRatio: `${displayCutout.width} / ${displayCutout.height}`,
@@ -1078,7 +1384,221 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           </div>
                         </div>
                       )}
+
+                      {/* Selected / Draft ROI Box */}
+                      {roiOverlayBox && (
+                        <div
+                          className="absolute pointer-events-none border-2 border-emerald-400 bg-emerald-400/20 shadow-[0_0_20px_rgba(52,211,153,0.55)]"
+                          style={{
+                            left: `${(0.5 + (roiOverlayBox.xMin - cutoutViewCenter.cx) * totalCutoutScale) * 100}%`,
+                            top: `${(0.5 + (roiOverlayBox.yMin - cutoutViewCenter.cy) * totalCutoutScale) * 100}%`,
+                            width: `${(roiOverlayBox.xMax - roiOverlayBox.xMin) * totalCutoutScale * 100}%`,
+                            height: `${(roiOverlayBox.yMax - roiOverlayBox.yMin) * totalCutoutScale * 100}%`,
+                          }}
+                        >
+                          <span className="absolute -top-1 -left-1 w-2 h-2 bg-emerald-300 rounded-[1px]" />
+                          <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-300 rounded-[1px]" />
+                          <span className="absolute -bottom-1 -left-1 w-2 h-2 bg-emerald-300 rounded-[1px]" />
+                          <span className="absolute -bottom-1 -right-1 w-2 h-2 bg-emerald-300 rounded-[1px]" />
+                        </div>
+                      )}
                     </div>
+
+                    {/* Callout Card Anchored Directly to Selected ROI */}
+                    {selectedRoi && !roiDraftBox && !showRoiModal && roiOverlayBox && (() => {
+                      const leftPct = (0.5 + (roiOverlayBox.xMin - cutoutViewCenter.cx) * totalCutoutScale) * 100;
+                      const rightPct = (0.5 + (roiOverlayBox.xMax - cutoutViewCenter.cx) * totalCutoutScale) * 100;
+                      const topPct = (0.5 + (roiOverlayBox.yMin - cutoutViewCenter.cy) * totalCutoutScale) * 100;
+                      const bottomPct = (0.5 + (roiOverlayBox.yMax - cutoutViewCenter.cy) * totalCutoutScale) * 100;
+                      const centerXPct = Math.min(82, Math.max(18, (leftPct + rightPct) / 2));
+                      const placeBelow = bottomPct <= 65;
+
+                      const pct =
+                        isScanningBands && scanProgress && scanProgress.total > 0
+                          ? Math.min(
+                              99,
+                              Math.round((scanProgress.current / scanProgress.total) * 100)
+                            )
+                          : observations.length > 0
+                            ? Math.min(
+                                100,
+                                Math.round(
+                                  ((roiAnalysis?.totalObservationsAnalyzed ?? 0) /
+                                    observations.length) *
+                                    100
+                                )
+                              )
+                            : 100;
+
+                      const handleSaveFromCard = (e: React.FormEvent) => {
+                        e.preventDefault();
+                        const trimmed = floatingSaveName.trim();
+                        if (!trimmed || !roiAnalysis) return;
+                        const id = `roi_${Date.now()}`;
+                        const next = saveRoiReading({
+                          id,
+                          name: trimmed,
+                          savedAt: new Date().toISOString(),
+                          targetName:
+                            resolvedObject?.canonicalName ?? targetName ?? "Target",
+                          roi: selectedRoi,
+                          analysis: roiAnalysis,
+                        });
+                        setSavedReadings(next);
+                        setSavedCurrentRoiId(id);
+                        setFloatingSaveName("");
+                      };
+
+                      return (
+                        <div
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onPointerMove={(e) => e.stopPropagation()}
+                          onPointerUp={(e) => e.stopPropagation()}
+                          className="absolute z-30 w-64 sm:w-72 -translate-x-1/2 rounded-2xl border border-emerald-400/55 bg-[#070B19]/95 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.85)] p-3 space-y-2"
+                          style={{
+                            left: `${centerXPct}%`,
+                            ...(placeBelow
+                              ? { top: `calc(${Math.min(92, Math.max(8, bottomPct))}% + 10px)` }
+                              : { bottom: `calc(${Math.min(92, Math.max(8, 100 - topPct))}% + 10px)` }),
+                          }}
+                        >
+                          {/* Connector Triangle pointing to the selected area */}
+                          <span
+                            className={`absolute left-1/2 -translate-x-1/2 w-2.5 h-2.5 rotate-45 bg-[#070B19] border-emerald-400/55 ${
+                              placeBelow
+                                ? "-top-1.5 border-l border-t"
+                                : "-bottom-1.5 border-r border-b"
+                            }`}
+                          />
+
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {isScanningBands ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00D2FF] shrink-0" />
+                              ) : (
+                                <FlaskConical className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                              )}
+                              <span className="text-xs font-semibold text-white truncate">
+                                {isScanningBands
+                                  ? isEn
+                                    ? `Processing... ${pct}%`
+                                    : `Procesando... ${pct}%`
+                                  : isEn
+                                    ? `Processed (${pct}%)`
+                                    : `Procesado (${pct}%)`}
+                              </span>
+                            </div>
+                            {!isScanningBands && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedRoi(null);
+                                  setRoiDraftBox(null);
+                                }}
+                                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer"
+                                aria-label={isEn ? "Close" : "Cerrar"}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                isScanningBands ? "bg-[#00D2FF]" : "bg-emerald-400"
+                              }`}
+                              style={{ width: `${Math.max(4, pct)}%` }}
+                            />
+                          </div>
+
+                          <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+                            <span>
+                              {roiAnalysis?.coveredChannelsCount ?? 0}/102{" "}
+                              {isEn ? "IR ch" : "canales IR"}
+                            </span>
+                            <span>
+                              {roiAnalysis?.detectedCount ?? 0}{" "}
+                              {isEn ? "detected" : "detectadas"}
+                            </span>
+                          </div>
+
+                          {!isScanningBands && roiAnalysis && (
+                            savedCurrentRoiId ? (
+                              <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-400/30 rounded-xl px-2.5 py-1">
+                                <Check className="w-3.5 h-3.5 shrink-0" />
+                                <span>
+                                  {isEn ? "Reading saved" : "Lectura guardada"}
+                                </span>
+                              </div>
+                            ) : (
+                              <form
+                                onSubmit={handleSaveFromCard}
+                                className="flex items-center gap-1.5"
+                              >
+                                <input
+                                  type="text"
+                                  value={floatingSaveName}
+                                  onChange={(e) => setFloatingSaveName(e.target.value)}
+                                  placeholder={
+                                    isEn ? "Save reading as..." : "Guardar lectura como..."
+                                  }
+                                  maxLength={48}
+                                  className="flex-1 min-w-0 rounded-xl bg-black/60 border border-white/15 focus:border-emerald-400 px-2.5 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={!floatingSaveName.trim()}
+                                  className="btn-press px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-[11px] flex items-center gap-1 cursor-pointer disabled:opacity-40 shrink-0"
+                                >
+                                  <Bookmark className="w-3 h-3" />
+                                  <span>{isEn ? "Save" : "Guardar"}</span>
+                                </button>
+                              </form>
+                            )
+                          )}
+
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            {isScanningBands ? (
+                              <button
+                                type="button"
+                                onClick={handleCancelScanBands}
+                                className="btn-press px-2.5 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-[11px] text-rose-200 cursor-pointer"
+                              >
+                                {isEn ? "Cancel" : "Cancelar"}
+                              </button>
+                            ) : (
+                              savedReadings.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRoiModalTab("compare");
+                                    setShowRoiModal(true);
+                                  }}
+                                  className="btn-press px-2.5 py-1 rounded-xl bg-white/[0.06] hover:bg-white/10 border border-white/10 text-[11px] text-slate-200 flex items-center gap-1 cursor-pointer"
+                                >
+                                  <GitCompareArrows className="w-3 h-3 text-[#00D2FF]" />
+                                  <span>
+                                    {isEn ? "Compare" : "Comparar"} ({savedReadings.length})
+                                  </span>
+                                </button>
+                              )
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRoiModalTab("current");
+                                setShowRoiModal(true);
+                              }}
+                              className="btn-press ml-auto px-3 py-1 rounded-xl bg-[#00D2FF]/20 hover:bg-[#00D2FF]/30 border border-[#00D2FF]/60 text-[11px] font-semibold text-white cursor-pointer"
+                            >
+                              {isEn ? "View details" : "Ver en detalle"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Left Y-Axis (Declination) */}
                     {axisTicks && (
@@ -1139,28 +1659,41 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
                 {/* Bottom Floating Controls inside Map 2 */}
                 <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-2 flex-wrap pointer-events-none">
-                  {/* Metadata / Wavelength Pill */}
-                  <div className="glass-panel rounded-full px-3 py-1.5 text-[11px] font-mono text-slate-200 flex items-center gap-2 pointer-events-auto">
-                    {selectedObs ? (
-                      <>
-                        <span className="text-[#00D2FF] font-semibold">
-                          {selectedObs.bandpass}
+                  <div className="flex items-center gap-2 flex-wrap pointer-events-auto">
+                    {/* Metadata / Wavelength Pill */}
+                    <div className="glass-panel rounded-full px-3 py-1.5 text-[11px] font-mono text-slate-200 flex items-center gap-2">
+                      {selectedObs ? (
+                        <>
+                          <span className="text-[#00D2FF] font-semibold">
+                            {selectedObs.bandpass}
+                          </span>
+                          <span className="text-slate-500">·</span>
+                          <span>
+                            {selectedObs.em_min_um !== null && selectedObs.em_max_um !== null
+                              ? `${selectedObs.em_min_um}–${selectedObs.em_max_um} µm`
+                              : t.viewer.infrared}
+                          </span>
+                          {selectedObs.epoch_date && (
+                            <>
+                              <span className="text-slate-500">·</span>
+                              <span className="text-amber-300">{selectedObs.epoch_date}</span>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <span>FOV {currentFov.toFixed(2)}°</span>
+                      )}
+                    </div>
+
+                    {/* Hovered Mouse Coordinates Pill (outside FITS image area) */}
+                    {displayCutout && cutoutCursorCoords && (
+                      <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-2 text-[11px] font-mono text-slate-100 pointer-events-none border-[#00D2FF]/40">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399] shrink-0" />
+                        <span className="whitespace-nowrap">
+                          RA {formatRAtoHMS(cutoutCursorCoords.ra)} · Dec{" "}
+                          {formatDectoDMS(cutoutCursorCoords.dec)}
                         </span>
-                        <span className="text-slate-500">·</span>
-                        <span>
-                          {selectedObs.em_min_um !== null && selectedObs.em_max_um !== null
-                            ? `${selectedObs.em_min_um}–${selectedObs.em_max_um} µm`
-                            : t.viewer.infrared}
-                        </span>
-                        {selectedObs.epoch_date && (
-                          <>
-                            <span className="text-slate-500">·</span>
-                            <span className="text-amber-300">{selectedObs.epoch_date}</span>
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <span>FOV {currentFov.toFixed(2)}°</span>
+                      </div>
                     )}
                   </div>
 
@@ -1463,6 +1996,46 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
           </div>
         </div>
       )}
+
+      <RoiAnalysisModal
+        isOpen={showRoiModal}
+        initialTab={roiModalTab}
+        roi={selectedRoi}
+        analysis={roiAnalysis}
+        targetName={resolvedObject?.canonicalName ?? targetName ?? "Target"}
+        totalAvailableObservations={observations.length}
+        isScanning={isScanningBands}
+        scanProgress={scanProgress}
+        savedReadings={savedReadings}
+        isCurrentSaved={savedCurrentRoiId !== null}
+        onSaveReading={(name) => {
+          if (!selectedRoi || !roiAnalysis) return;
+          const id = `roi_${Date.now()}`;
+          const next = saveRoiReading({
+            id,
+            name,
+            savedAt: new Date().toISOString(),
+            targetName: resolvedObject?.canonicalName ?? targetName ?? "Target",
+            roi: selectedRoi,
+            analysis: roiAnalysis,
+          });
+          setSavedReadings(next);
+          setSavedCurrentRoiId(id);
+        }}
+        onDeleteSavedReading={(id) => {
+          setSavedReadings(deleteRoiReading(id));
+          if (savedCurrentRoiId === id) setSavedCurrentRoiId(null);
+        }}
+        onScanAllBands={handleScanAllBands}
+        onCancelScan={handleCancelScanBands}
+        onClearRoi={() => {
+          setSelectedRoi(null);
+          setRoiDraftBox(null);
+          setSavedCurrentRoiId(null);
+          setShowRoiModal(false);
+        }}
+        onClose={() => setShowRoiModal(false)}
+      />
     </main>
   );
 };

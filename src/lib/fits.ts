@@ -1,4 +1,11 @@
-import type { ColormapName, CutoutStats, FitsWcs, RenderedCutout, StretchMode } from "./types";
+import type {
+  ColormapName,
+  CutoutStats,
+  FitsWaveCalibration,
+  FitsWcs,
+  RenderedCutout,
+  StretchMode,
+} from "./types";
 
 interface FitsHdu {
   name: string;
@@ -302,6 +309,43 @@ function extractWcsFromHeader(header: Record<string, string>): FitsWcs | null {
   };
 }
 
+function extractWaveCalibration(
+  rawBuffer: ArrayBuffer,
+  imageHeader: Record<string, string>,
+  hdus: FitsHdu[]
+): FitsWaveCalibration | null {
+  const waveHdu = hdus.find((h) => h.name === "WCS-WAVE");
+  if (!waveHdu || waveHdu.dataBytes < 720 || waveHdu.dataOffset + 720 > rawBuffer.byteLength) {
+    return null;
+  }
+  const crpix1w = parseNum(imageHeader, "CRPIX1W");
+  const crpix2w = parseNum(imageHeader, "CRPIX2W");
+  if (crpix1w === null || crpix2w === null) return null;
+
+  const dv = new DataView(rawBuffer, waveHdu.dataOffset, 720);
+  const xCoords: number[] = [];
+  const yCoords: number[] = [];
+  const values: number[] = [];
+
+  for (let i = 0; i < 9; i++) {
+    xCoords.push(dv.getInt32(i * 4, false));
+  }
+  for (let i = 0; i < 9; i++) {
+    yCoords.push(dv.getInt32(36 + i * 4, false));
+  }
+  for (let i = 0; i < 162; i++) {
+    values.push(dv.getFloat32(72 + i * 4, false));
+  }
+
+  return {
+    crpix1w,
+    crpix2w,
+    xCoords,
+    yCoords,
+    values,
+  };
+}
+
 export interface FitsPixelResult {
   rgba: Uint8ClampedArray;
   outW: number;
@@ -311,6 +355,9 @@ export interface FitsPixelResult {
   stats: CutoutStats;
   wcs: FitsWcs | null;
   fitsCutoutUrl: string;
+  fluxData: Float32Array;
+  varianceData: Float32Array | null;
+  waveGrid: FitsWaveCalibration | null;
 }
 
 export function computeFitsPixels(
@@ -320,6 +367,7 @@ export function computeFitsPixels(
     colormap: ColormapName;
     subtractZodi: boolean;
     fitsCutoutUrl: string;
+    skipRender?: boolean;
   }
 ): FitsPixelResult {
   const hdus = parseFitsHdus(rawBuffer);
@@ -344,6 +392,15 @@ export function computeFitsPixels(
       data[i] = data[i] - zodi[i];
     }
   }
+
+  const varianceHdu = hdus.find((h) => h.name === "VARIANCE" && h.naxis === 2);
+  let varianceData: Float32Array | null = null;
+  if (varianceHdu && varianceHdu.naxis1 === width && varianceHdu.naxis2 === height) {
+    const rawVar = readImagePixels(rawBuffer, varianceHdu);
+    varianceData = new Float32Array(rawVar);
+  }
+  const fluxData = new Float32Array(data);
+  const waveGrid = extractWaveCalibration(rawBuffer, imageHdu.header, hdus);
 
   // Contar y copiar valores finitos en Float64Array para ordenamiento numérico nativo rápido
   let finiteCount = 0;
@@ -378,41 +435,43 @@ export function computeFitsPixels(
   const vmax = finiteVals[Math.min(n - 1, Math.floor(0.9975 * (n - 1)))];
   const span = vmax > vmin ? vmax - vmin : 1;
 
-  const lut = LUTS[options.colormap] ?? LUTS.inferno;
   const maxDim = Math.max(width, height);
   const scale = maxDim < 512 ? Math.max(1, Math.floor(512 / maxDim)) : 1;
-  const outW = width * scale;
-  const outH = height * scale;
+  const outW = options.skipRender ? 0 : width * scale;
+  const outH = options.skipRender ? 0 : height * scale;
 
   const pixels = new Uint8ClampedArray(outW * outH * 4);
 
-  for (let y = 0; y < height; y++) {
-    // Flip vertical: FITS almacena el origen abajo a la izquierda (Astronomical North-up)
-    const srcRow = height - 1 - y;
-    for (let x = 0; x < width; x++) {
-      const val = data[srcRow * width + x];
-      let r = 15;
-      let g = 23;
-      let b = 42;
+  if (!options.skipRender) {
+    const lut = LUTS[options.colormap] ?? LUTS.inferno;
+    for (let y = 0; y < height; y++) {
+      // Flip vertical: FITS almacena el origen abajo a la izquierda (Astronomical North-up)
+      const srcRow = height - 1 - y;
+      for (let x = 0; x < width; x++) {
+        const val = data[srcRow * width + x];
+        let r = 15;
+        let g = 23;
+        let b = 42;
 
-      if (Number.isFinite(val)) {
-        const norm = vmax > vmin ? Math.min(1, Math.max(0, (val - vmin) / span)) : 0;
-        const stretched = applyStretch(norm, options.stretch);
-        const idx = Math.min(255, Math.max(0, Math.round(stretched * 255)));
-        r = lut[idx * 3];
-        g = lut[idx * 3 + 1];
-        b = lut[idx * 3 + 2];
-      }
+        if (Number.isFinite(val)) {
+          const norm = vmax > vmin ? Math.min(1, Math.max(0, (val - vmin) / span)) : 0;
+          const stretched = applyStretch(norm, options.stretch);
+          const idx = Math.min(255, Math.max(0, Math.round(stretched * 255)));
+          r = lut[idx * 3];
+          g = lut[idx * 3 + 1];
+          b = lut[idx * 3 + 2];
+        }
 
-      for (let sy = 0; sy < scale; sy++) {
-        const py = y * scale + sy;
-        for (let sx = 0; sx < scale; sx++) {
-          const px = x * scale + sx;
-          const outIdx = (py * outW + px) * 4;
-          pixels[outIdx] = r;
-          pixels[outIdx + 1] = g;
-          pixels[outIdx + 2] = b;
-          pixels[outIdx + 3] = 255;
+        for (let sy = 0; sy < scale; sy++) {
+          const py = y * scale + sy;
+          for (let sx = 0; sx < scale; sx++) {
+            const px = x * scale + sx;
+            const outIdx = (py * outW + px) * 4;
+            pixels[outIdx] = r;
+            pixels[outIdx + 1] = g;
+            pixels[outIdx + 2] = b;
+            pixels[outIdx + 3] = 255;
+          }
         }
       }
     }
@@ -436,10 +495,28 @@ export function computeFitsPixels(
     },
     wcs: extractWcsFromHeader(imageHdu.header),
     fitsCutoutUrl: options.fitsCutoutUrl,
+    fluxData,
+    varianceData,
+    waveGrid,
   };
 }
 
 export function rgbaToRenderedCutout(result: FitsPixelResult): RenderedCutout {
+  if (result.outW <= 0 || result.outH <= 0) {
+    return {
+      imageData: new ImageData(1, 1),
+      dataUrl: "",
+      width: result.width,
+      height: result.height,
+      stats: result.stats,
+      wcs: result.wcs,
+      fits_cutout_url: result.fitsCutoutUrl,
+      fluxData: result.fluxData,
+      varianceData: result.varianceData,
+      waveGrid: result.waveGrid,
+    };
+  }
+
   const canvas = document.createElement("canvas");
   canvas.width = result.outW;
   canvas.height = result.outH;
@@ -464,6 +541,9 @@ export function rgbaToRenderedCutout(result: FitsPixelResult): RenderedCutout {
     stats: result.stats,
     wcs: result.wcs,
     fits_cutout_url: result.fitsCutoutUrl,
+    fluxData: result.fluxData,
+    varianceData: result.varianceData,
+    waveGrid: result.waveGrid,
   };
 }
 
@@ -474,6 +554,7 @@ export function renderFitsBuffer(
     colormap: ColormapName;
     subtractZodi: boolean;
     fitsCutoutUrl: string;
+    skipRender?: boolean;
   }
 ): RenderedCutout {
   return rgbaToRenderedCutout(computeFitsPixels(rawBuffer, options));

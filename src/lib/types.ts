@@ -77,6 +77,15 @@ export interface FitsWcs {
   cd2_2: number;
 }
 
+export interface FitsWaveCalibration {
+  crpix1w: number;
+  crpix2w: number;
+  xCoords: number[];
+  yCoords: number[];
+  /** Grid de valores [waveUm, bandwidthUm] de tamaño (yCoords.length * xCoords.length * 2) */
+  values: number[];
+}
+
 export interface RenderedCutout {
   imageData: ImageData;
   dataUrl: string;
@@ -85,6 +94,9 @@ export interface RenderedCutout {
   stats: CutoutStats;
   wcs: FitsWcs | null;
   fits_cutout_url: string;
+  fluxData?: Float32Array;
+  varianceData?: Float32Array | null;
+  waveGrid?: FitsWaveCalibration | null;
 }
 
 export type StretchMode = "asinh" | "log" | "sqrt" | "linear";
@@ -144,4 +156,85 @@ export interface SpectrumDataPoint {
   unit: string;
   snr: number | null;
   mjd: number | null;
+}
+
+export interface SkyRoiSelection {
+  /** 4 esquinas en orden horario o antihorario en ICRS (grados) */
+  corners: Array<{ ra: number; dec: number }>;
+  centerRa: number;
+  centerDec: number;
+  widthArcsec: number;
+  heightArcsec: number;
+  epochDate?: string | null;
+  epochMjd?: number | null;
+}
+
+export interface RoiSpectrumPoint {
+  obs_id: string;
+  bandpass: string;
+  detector: string;
+  waveUm: number;
+  bandwidthUm: number | null;
+  flux: number;
+  sigma: number;
+  snr: number | null;
+  pixelCount: number;
+}
+
+export type ChemicalDetectionStatus =
+  | "detected"
+  | "marginal"
+  | "not_detected"
+  | "no_coverage";
+
+export interface ChemicalSpeciesResult {
+  id: string;
+  formula: string;
+  nameEs: string;
+  nameEn: string;
+  kind: "absorption" | "emission";
+  centerUm: number;
+  bandWindowUm: [number, number];
+  status: ChemicalDetectionStatus;
+  equivalentWidthUm: number;
+  equivalentWidthErrorUm: number;
+  snr: number;
+  integratedTauCm1: number | null;
+  columnDensityCm2: number | null;
+  columnDensityErrorCm2: number | null;
+  spectralSharePct: number | null;
+  spectralShareErrorPct: number | null;
+  molarSharePct: number | null;
+  molarShareErrorPct: number | null;
+  pointsInBand: number;
+  pointsLeftContinuum: number;
+  pointsRightContinuum: number;
+}
+
+export interface RoiChemicalAnalysisResult {
+  spectrumPoints: RoiSpectrumPoint[];
+  coveredChannelsCount: number;
+  totalObservationsAnalyzed: number;
+  species: ChemicalSpeciesResult[];
+  detectedCount: number;
+  marginalCount: number;
+  hasMolarProportions: boolean;
+}
+
+export interface SavedRoiReading {
+  id: string;
+  name: string;
+  savedAt: string;
+  targetName: string;
+  roi: SkyRoiSelection;
+  analysis: RoiChemicalAnalysisResult;
+}
+
+export interface RoiComparisonResult {
+  overlapChannels: number;
+  spectralSimilarityPct: number | null;
+  chemicalSimilarityPct: number | null;
+  overallSimilarityPct: number | null;
+  sharedDetectedFormulas: string[];
+  insufficientOverlap: boolean;
 }

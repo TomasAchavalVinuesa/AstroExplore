@@ -9,6 +9,7 @@ export interface FitsWorkerRequest {
     colormap: ColormapName;
     subtractZodi: boolean;
     fitsCutoutUrl: string;
+    skipRender?: boolean;
   };
 }
 
@@ -29,8 +30,12 @@ self.onmessage = (event: MessageEvent<FitsWorkerRequest>) => {
   try {
     const result = computeFitsPixels(buffer, options);
     const response: FitsWorkerResponse = { id, ok: true, result };
-    // Transferir el ArrayBuffer de salida sin copiar memoria
-    (self as unknown as Worker).postMessage(response, [result.rgba.buffer]);
+    // Transferir los ArrayBuffer de salida sin copiar memoria
+    const transferables: Transferable[] = [result.rgba.buffer, result.fluxData.buffer];
+    if (result.varianceData) {
+      transferables.push(result.varianceData.buffer);
+    }
+    (self as unknown as Worker).postMessage(response, transferables);
   } catch (err) {
     const response: FitsWorkerResponse = {
       id,

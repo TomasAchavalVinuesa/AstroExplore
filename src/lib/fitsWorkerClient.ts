@@ -65,6 +65,7 @@ export function renderFitsBufferAsync(
     colormap: ColormapName;
     subtractZodi: boolean;
     fitsCutoutUrl: string;
+    skipRender?: boolean;
   },
   signal?: AbortSignal
 ): Promise<RenderedCutout> {
