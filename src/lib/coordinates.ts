@@ -274,25 +274,72 @@ function generateNiceTicks(
   return ticks;
 }
 
+export interface NormalizedImageBounds {
+  xMinFrac: number;
+  xMaxFrac: number;
+  yMinFrac: number;
+  yMaxFrac: number;
+}
+
+/**
+ * Calcula los 4 vértices celestes (RA, Dec) del sub-rectángulo visible actual
+ * dentro de un recorte FITS renderizado.
+ */
+export function computeVisibleSkyPolygon(
+  width: number,
+  height: number,
+  wcs: FitsWcs | null,
+  visibleBounds?: NormalizedImageBounds
+): { ra: number; dec: number }[] | null {
+  if (!wcs || width <= 0 || height <= 0) return null;
+  const xMin = visibleBounds?.xMinFrac ?? 0;
+  const xMax = visibleBounds?.xMaxFrac ?? 1;
+  const yMin = visibleBounds?.yMinFrac ?? 0;
+  const yMax = visibleBounds?.yMaxFrac ?? 1;
+
+  const pxLeft = 0.5 + xMin * width;
+  const pxRight = 0.5 + xMax * width;
+  const pyBottom = 0.5 + (1 - yMax) * height;
+  const pyTop = 0.5 + (1 - yMin) * height;
+
+  return [
+    pixelToWorld(pxLeft, pyBottom, wcs),
+    pixelToWorld(pxRight, pyBottom, wcs),
+    pixelToWorld(pxRight, pyTop, wcs),
+    pixelToWorld(pxLeft, pyTop, wcs),
+  ];
+}
+
 /**
  * Calcula los ticks cartesianos de RA (eje X inferior) y Dec (eje Y izquierdo)
- * alrededor de la imagen FITS, ajustados al WCS real o al FOV actual.
+ * alrededor de la imagen FITS, ajustados al WCS real y a la región visible actual.
  */
 export function computeAxisTicks(
   width: number,
   height: number,
   wcs: FitsWcs | null,
-  fallbackCenter: { ra: number; dec: number; size: number }
+  fallbackCenter: { ra: number; dec: number; size: number },
+  visibleBounds?: NormalizedImageBounds
 ): { xTicks: AxisTick[]; yTicks: AxisTick[] } {
+  const xMin = visibleBounds?.xMinFrac ?? 0;
+  const xMax = visibleBounds?.xMaxFrac ?? 1;
+  const yMin = visibleBounds?.yMinFrac ?? 0;
+  const yMax = visibleBounds?.yMaxFrac ?? 1;
+
   let raStart: number;
   let raEnd: number;
   let decTop: number;
   let decBottom: number;
 
   if (wcs && width > 0 && height > 0) {
-    const bottomLeft = pixelToWorld(0.5, 0.5, wcs);
-    const bottomRight = pixelToWorld(width + 0.5, 0.5, wcs);
-    const topLeft = pixelToWorld(0.5, height + 0.5, wcs);
+    const pxLeft = 0.5 + xMin * width;
+    const pxRight = 0.5 + xMax * width;
+    const pyBottom = 0.5 + (1 - yMax) * height;
+    const pyTop = 0.5 + (1 - yMin) * height;
+
+    const bottomLeft = pixelToWorld(pxLeft, pyBottom, wcs);
+    const bottomRight = pixelToWorld(pxRight, pyBottom, wcs);
+    const topLeft = pixelToWorld(pxLeft, pyTop, wcs);
 
     raStart = bottomLeft.ra;
     raEnd = bottomRight.ra;
@@ -303,11 +350,15 @@ export function computeAxisTicks(
     decBottom = bottomLeft.dec;
   } else {
     const cosDec = Math.max(0.05, Math.cos((fallbackCenter.dec * Math.PI) / 180));
-    const halfRa = fallbackCenter.size / 2 / cosDec;
-    raStart = fallbackCenter.ra + halfRa;
-    raEnd = fallbackCenter.ra - halfRa;
-    decTop = fallbackCenter.dec + fallbackCenter.size / 2;
-    decBottom = fallbackCenter.dec - fallbackCenter.size / 2;
+    const fullRaSpan = MAX_CUTOUT_FOV_DEG / cosDec;
+    const fullDecSpan = MAX_CUTOUT_FOV_DEG;
+    const raLeftEdge = fallbackCenter.ra + fullRaSpan / 2;
+    const decTopEdge = fallbackCenter.dec + fullDecSpan / 2;
+
+    raStart = raLeftEdge - xMin * fullRaSpan;
+    raEnd = raLeftEdge - xMax * fullRaSpan;
+    decTop = decTopEdge - yMin * fullDecSpan;
+    decBottom = decTopEdge - yMax * fullDecSpan;
   }
 
   return {

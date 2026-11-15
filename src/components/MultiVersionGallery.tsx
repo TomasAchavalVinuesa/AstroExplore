@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Grid, Layers, Loader2, Sparkles } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
+import { MAX_CUTOUT_FOV_DEG } from "../lib/coordinates";
 import { getRenderedCutout, SPHEREX_COLLECTIONS } from "../lib/irsa";
 import type {
   CollectionVersionData,
@@ -112,9 +113,12 @@ export const MultiVersionGallery: React.FC<MultiVersionGalleryProps> = ({
     [galleryItems, startIdx, endIdx]
   );
 
+  const targetRa = lastCoords?.ra;
+  const targetDec = lastCoords?.dec;
+
   useEffect(() => {
     setGalleryPage(1);
-  }, [galleryItems, lastCoords]);
+  }, [galleryItems, targetRa, targetDec]);
 
   // Observador de visibilidad para cargar solo las tarjetas visibles de la página actual (lazy loading)
   useEffect(() => {
@@ -200,12 +204,12 @@ export const MultiVersionGallery: React.FC<MultiVersionGalleryProps> = ({
     return () => {
       controller.abort();
     };
-  }, [galleryItems, lastCoords, stretch, colormap, subtractZodi]);
+  }, [galleryItems, targetRa, targetDec, stretch, colormap, subtractZodi]);
 
   // Encolar únicamente los ítems visibles de la página actual que aún no han comenzado a descargarse
   useEffect(() => {
     const controller = batchAbortRef.current;
-    if (!lastCoords || !controller || controller.signal.aborted) return;
+    if (targetRa === undefined || targetDec === undefined || !controller || controller.signal.aborted) return;
 
     const pendingVisible = paginatedGalleryItems.filter(
       (item) => visibleKeys.has(item.key) && !startedKeysRef.current.has(item.key)
@@ -227,9 +231,9 @@ export const MultiVersionGallery: React.FC<MultiVersionGalleryProps> = ({
     for (const item of pendingVisible) {
       void getRenderedCutout({
         accessUrl: item.obs.access_url,
-        ra: lastCoords.ra,
-        dec: lastCoords.dec,
-        size: lastCoords.size,
+        ra: targetRa,
+        dec: targetDec,
+        size: MAX_CUTOUT_FOV_DEG,
         stretch,
         colormap,
         subtractZodi,
@@ -257,7 +261,7 @@ export const MultiVersionGallery: React.FC<MultiVersionGalleryProps> = ({
           }));
         });
     }
-  }, [visibleKeys, paginatedGalleryItems, lastCoords, stretch, colormap, subtractZodi]);
+  }, [visibleKeys, paginatedGalleryItems, targetRa, targetDec, stretch, colormap, subtractZodi]);
 
   if (!versions || availableCollections.length === 0 || galleryItems.length === 0) {
     return null;

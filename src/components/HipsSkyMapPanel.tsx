@@ -50,6 +50,7 @@ interface HipsSkyMapPanelProps {
   onToggleSecondMap?: (open: boolean) => void;
   externalChannelIdx?: number | null;
   secondMapZoom?: number;
+  secondMapViewCorners?: { ra: number; dec: number }[] | null;
   onChangeFov?: (newSize: number) => void;
   onSelectObservation?: (obs: SpherexObservation) => void;
   onQueryAtCoords?: (raDeg: number, decDeg: number) => void;
@@ -354,6 +355,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
   onToggleSecondMap,
   externalChannelIdx,
   secondMapZoom = 1,
+  secondMapViewCorners = null,
   onQueryAtCoords,
 }) => {
   const { t } = useLanguage();
@@ -448,7 +450,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       setFovDeg(prevFovRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondMapOpen, observations, targetCoords?.ra, targetCoords?.dec, targetCoords?.size]);
+  }, [secondMapOpen, observations, targetCoords?.ra, targetCoords?.dec]);
 
   // Cargar MOC de SPHEREx cuando se activa una capa MOC
   useEffect(() => {
@@ -906,18 +908,24 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
     // 4b. Resaltar en el Mapa 1 el recuadro exacto de lo que muestra el Mapa 2 cuando está abierto
     if (secondMapOpen) {
-      const boxCenter = markedPoint ?? targetCoords ?? viewCenter;
-      const baseSizeDeg = targetCoords?.size ?? 0.15;
-      const effectiveSizeDeg = baseSizeDeg / Math.max(1, secondMapZoom);
-      const halfDec = effectiveSizeDeg / 2;
-      const halfRa = halfDec / Math.max(0.15, Math.cos(boxCenter.dec * DEG2RAD));
+      const skyCorners =
+        secondMapViewCorners && secondMapViewCorners.length === 4
+          ? secondMapViewCorners
+          : (() => {
+              const boxCenter = markedPoint ?? targetCoords ?? viewCenter;
+              const baseSizeDeg = targetCoords?.size ?? 0.15;
+              const effectiveSizeDeg = baseSizeDeg / Math.max(1, secondMapZoom);
+              const halfDec = effectiveSizeDeg / 2;
+              const halfRa = halfDec / Math.max(0.15, Math.cos(boxCenter.dec * DEG2RAD));
+              return [
+                { ra: boxCenter.ra - halfRa, dec: boxCenter.dec - halfDec },
+                { ra: boxCenter.ra + halfRa, dec: boxCenter.dec - halfDec },
+                { ra: boxCenter.ra + halfRa, dec: boxCenter.dec + halfDec },
+                { ra: boxCenter.ra - halfRa, dec: boxCenter.dec + halfDec },
+              ];
+            })();
 
-      const boxCorners = [
-        { ra: boxCenter.ra - halfRa, dec: boxCenter.dec - halfDec },
-        { ra: boxCenter.ra + halfRa, dec: boxCenter.dec - halfDec },
-        { ra: boxCenter.ra + halfRa, dec: boxCenter.dec + halfDec },
-        { ra: boxCenter.ra - halfRa, dec: boxCenter.dec + halfDec },
-      ].map((c) => projectSky(c.ra, c.dec));
+      const boxCorners = skyCorners.map((c) => projectSky(c.ra, c.dec));
 
       if (isAitoff || !boxCorners.some((p) => p.cosC <= 0.05)) {
         ctx.save();
@@ -1018,6 +1026,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     markedPoint,
     secondMapOpen,
     secondMapZoom,
+    secondMapViewCorners,
     renderTick,
     triggerRepaint,
   ]);

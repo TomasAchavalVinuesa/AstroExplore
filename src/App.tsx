@@ -14,6 +14,7 @@ import {
 import { ViewerPanel } from "./components/ViewerPanel";
 import {
   DEFAULT_CUTOUT_FOV_DEG,
+  MAX_CUTOUT_FOV_DEG,
   clampCutoutFov,
   parseDec,
   parseRA,
@@ -282,37 +283,41 @@ export default function App() {
     []
   );
 
+  const targetRa = lastCoords?.ra;
+  const targetDec = lastCoords?.dec;
+
   // Instant update of flux stretch, colormap, or zodi subtraction on loaded FITS
+  // Always load the full MAX_CUTOUT_FOV_DEG image so reducing FOV stays within the same image
   useEffect(() => {
     const obs = observations[selectedIdx];
-    if (!obs || !lastCoords) return;
+    if (!obs || targetRa === undefined || targetDec === undefined) return;
     void loadCutout(
       obs,
-      lastCoords.ra,
-      lastCoords.dec,
-      lastCoords.size,
+      targetRa,
+      targetDec,
+      MAX_CUTOUT_FOV_DEG,
       stretch,
       colormap,
       subtractZodi
     );
-  }, [stretch, colormap, subtractZodi, selectedIdx, observations, lastCoords, loadCutout]);
+  }, [stretch, colormap, subtractZodi, selectedIdx, observations, targetRa, targetDec, loadCutout]);
 
   // Background prefetch next observation
   useEffect(() => {
-    if (cutoutLoading || !cutout || !lastCoords) return;
+    if (cutoutLoading || !cutout || targetRa === undefined || targetDec === undefined) return;
     const nextObs = observations[selectedIdx + 1];
     if (!nextObs) return;
 
     const controller = new AbortController();
     prefetchFitsCutout({
       accessUrl: nextObs.access_url,
-      ra: lastCoords.ra,
-      dec: lastCoords.dec,
-      size: lastCoords.size,
+      ra: targetRa,
+      dec: targetDec,
+      size: MAX_CUTOUT_FOV_DEG,
       signal: controller.signal,
     });
     return () => controller.abort();
-  }, [cutoutLoading, cutout, lastCoords, observations, selectedIdx]);
+  }, [cutoutLoading, cutout, targetRa, targetDec, observations, selectedIdx]);
 
   // URL State: Parse URL parameters on initial load (supports ?ra=&dec= and ?target=)
   useEffect(() => {

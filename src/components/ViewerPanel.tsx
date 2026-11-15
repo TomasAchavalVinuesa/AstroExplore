@@ -35,6 +35,7 @@ import {
   MIN_CUTOUT_FOV_DEG,
   clampCutoutFov,
   computeAxisTicks,
+  computeVisibleSkyPolygon,
   getTargetImageFraction,
 } from "../lib/coordinates";
 import { getRenderedCutout } from "../lib/irsa";
@@ -104,10 +105,27 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const { t, language } = useLanguage();
   const isEn = language === "en";
   const [cutoutZoom, setCutoutZoom] = useState<number>(1);
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDraggingCutout, setIsDraggingCutout] = useState<boolean>(false);
   const [secondMapTab, setSecondMapTab] = useState<
     "cutout" | "bands" | "sed" | "blink" | "guide"
   >("cutout");
   const [showGalleryModal, setShowGalleryModal] = useState<boolean>(false);
+
+  const cutoutImageFrameRef = useRef<HTMLDivElement | null>(null);
+  const cutoutDragRef = useRef<{
+    dragging: boolean;
+    startX: number;
+    startY: number;
+    startCx: number;
+    startCy: number;
+  }>({
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    startCx: 0.5,
+    startCy: 0.5,
+  });
 
   // Floating Epoch Playback Bar state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -171,8 +189,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     (o) => o.obs_id === selectedObs?.obs_id && o.bandpass === selectedObs?.bandpass
   );
 
+  const targetRa = lastCoords?.ra;
+  const targetDec = lastCoords?.dec;
+
+  useEffect(() => {
+    setPanOffset({ x: 0, y: 0 });
+  }, [targetRa, targetDec]);
+
   const handleScanAllBands = async () => {
-    if (!lastCoords || isScanningBands || observations.length === 0) return;
+    if (targetRa === undefined || targetDec === undefined || isScanningBands || observations.length === 0) return;
     setIsScanningBands(true);
     let done = 0;
     const total = observations.length;
@@ -183,9 +208,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
         try {
           const rendered = await getRenderedCutout({
             accessUrl: obs.access_url,
-            ra: lastCoords.ra,
-            dec: lastCoords.dec,
-            size: lastCoords.size,
+            ra: targetRa,
+            dec: targetDec,
+            size: MAX_CUTOUT_FOV_DEG,
             stretch,
             colormap,
             subtractZodi,
@@ -265,9 +290,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   }, [epochFrames.length, playbackFrames.length, isPlaying]);
 
   const renderSignature = useMemo(() => {
-    if (!lastCoords) return "";
-    return `${lastCoords.ra.toFixed(6)}|${lastCoords.dec.toFixed(6)}|${lastCoords.size}|${stretch}|${colormap}|${subtractZodi}`;
-  }, [lastCoords, stretch, colormap, subtractZodi]);
+    if (targetRa === undefined || targetDec === undefined) return "";
+    return `${targetRa.toFixed(6)}|${targetDec.toFixed(6)}|${stretch}|${colormap}|${subtractZodi}`;
+  }, [targetRa, targetDec, stretch, colormap, subtractZodi]);
 
   // Clear rendered frame cache when coordinates or visual parameters change
   useEffect(() => {
@@ -276,8 +301,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   }, [renderSignature]);
 
   // Preload and cache all selected playback frames before showing the first image
+  // Always load at MAX_CUTOUT_FOV_DEG so reducing FOV keeps the exact same image
   useEffect(() => {
-    if (!secondMapOpen || secondMapTab !== "cutout" || !lastCoords || playbackFrames.length === 0) {
+    if (
+      !secondMapOpen ||
+      secondMapTab !== "cutout" ||
+      targetRa === undefined ||
+      targetDec === undefined ||
+      playbackFrames.length === 0
+    ) {
       return;
     }
     const controller = new AbortController();
@@ -296,9 +328,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
       void getRenderedCutout({
         accessUrl: obs.access_url,
-        ra: lastCoords.ra,
-        dec: lastCoords.dec,
-        size: lastCoords.size,
+        ra: targetRa,
+        dec: targetDec,
+        size: MAX_CUTOUT_FOV_DEG,
         stretch,
         colormap,
         subtractZodi,
@@ -327,7 +359,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     secondMapTab,
     playbackFrames,
     renderSignature,
-    lastCoords,
+    targetRa,
+    targetDec,
     stretch,
     colormap,
     subtractZodi,
@@ -455,6 +488,12 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     onSelectVersionObservation,
   ]);
 
+  const currentFov = clampCutoutFov(lastCoords?.size ?? DEFAULT_CUTOUT_FOV_DEG);
+  const fovScale = MAX_CUTOUT_FOV_DEG / currentFov;
+  const totalCutoutScale = fovScale * cutoutZoom;
+  const canPanCutout = totalCutoutScale > 1.001;
+  const cutoutHalfSpan = Math.min(0.5, 0.5 / totalCutoutScale);
+
   // Mouse wheel zoom inside Map 2 (FITS Cutout viewport)
   useEffect(() => {
     const el = cutoutViewportRef.current;
@@ -464,6 +503,10 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       e.preventDefault();
       e.stopPropagation();
       if (e.deltaY === 0) return;
+      if (e.deltaY > 0 && cutoutZoom <= 1 && currentFov < MAX_CUTOUT_FOV_DEG) {
+        onChangeFov(clampCutoutFov(currentFov * 1.15));
+        return;
+      }
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
       setCutoutZoom((prev) => Number(Math.max(1, Math.min(6, prev * factor)).toFixed(2)));
     };
@@ -472,7 +515,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     return () => {
       el.removeEventListener("wheel", onNativeWheel);
     };
-  }, [secondMapOpen, secondMapTab, cutout]);
+  }, [secondMapOpen, secondMapTab, cutout, cutoutZoom, currentFov, onChangeFov]);
 
   // Representative D1..D6 observations for Map 2 "Bands" mode
   const bandRepresentatives = useMemo(() => {
@@ -485,7 +528,13 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   }, [observations]);
 
   useEffect(() => {
-    if (!secondMapOpen || secondMapTab !== "bands" || !lastCoords || bandRepresentatives.length === 0) {
+    if (
+      !secondMapOpen ||
+      secondMapTab !== "bands" ||
+      targetRa === undefined ||
+      targetDec === undefined ||
+      bandRepresentatives.length === 0
+    ) {
       return;
     }
     const controller = new AbortController();
@@ -498,9 +547,9 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
       void getRenderedCutout({
         accessUrl: obs.access_url,
-        ra: lastCoords.ra,
-        dec: lastCoords.dec,
-        size: lastCoords.size,
+        ra: targetRa,
+        dec: targetDec,
+        size: MAX_CUTOUT_FOV_DEG,
         stretch,
         colormap,
         subtractZodi,
@@ -529,28 +578,122 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     secondMapTab,
     bandRepresentatives,
     renderSignature,
-    lastCoords,
+    targetRa,
+    targetDec,
     stretch,
     colormap,
     subtractZodi,
   ]);
 
-  const axisTicks = useMemo(() => {
-    if (!displayCutout || !lastCoords) return null;
-    return computeAxisTicks(displayCutout.width, displayCutout.height, displayCutout.wcs, lastCoords);
-  }, [displayCutout, lastCoords]);
-
   const targetFraction = useMemo(() => {
-    if (!displayCutout) return null;
+    if (!displayCutout || targetRa === undefined || targetDec === undefined) return null;
     return getTargetImageFraction(
       displayCutout.width,
       displayCutout.height,
       displayCutout.wcs,
-      lastCoords
+      { ra: targetRa, dec: targetDec }
     );
-  }, [displayCutout, lastCoords]);
+  }, [displayCutout, targetRa, targetDec]);
 
-  const currentFov = lastCoords?.size ?? DEFAULT_CUTOUT_FOV_DEG;
+  const cutoutAnchor = useMemo(() => {
+    const baseX = targetFraction?.xFrac ?? 0.5;
+    const baseY = targetFraction?.yFrac ?? 0.5;
+    return {
+      x: Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, baseX)),
+      y: Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, baseY)),
+    };
+  }, [targetFraction, cutoutHalfSpan]);
+
+  const cutoutViewCenter = useMemo(() => {
+    return {
+      cx: Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, cutoutAnchor.x + panOffset.x)),
+      cy: Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, cutoutAnchor.y + panOffset.y)),
+    };
+  }, [cutoutAnchor, panOffset, cutoutHalfSpan]);
+
+  const cutoutVisibleBounds = useMemo(
+    () => ({
+      xMinFrac: Math.max(0, cutoutViewCenter.cx - cutoutHalfSpan),
+      xMaxFrac: Math.min(1, cutoutViewCenter.cx + cutoutHalfSpan),
+      yMinFrac: Math.max(0, cutoutViewCenter.cy - cutoutHalfSpan),
+      yMaxFrac: Math.min(1, cutoutViewCenter.cy + cutoutHalfSpan),
+    }),
+    [cutoutViewCenter, cutoutHalfSpan]
+  );
+
+  const cutoutTransformStyle = useMemo(() => {
+    const tx = (0.5 - cutoutViewCenter.cx) * totalCutoutScale * 100;
+    const ty = (0.5 - cutoutViewCenter.cy) * totalCutoutScale * 100;
+    return {
+      transform: `translate(${tx}%, ${ty}%) scale(${totalCutoutScale})`,
+      transformOrigin: "center center" as const,
+    };
+  }, [cutoutViewCenter, totalCutoutScale]);
+
+  const axisTicks = useMemo(() => {
+    if (!displayCutout || !lastCoords) return null;
+    return computeAxisTicks(
+      displayCutout.width,
+      displayCutout.height,
+      displayCutout.wcs,
+      lastCoords,
+      cutoutVisibleBounds
+    );
+  }, [displayCutout, lastCoords, cutoutVisibleBounds]);
+
+  const secondMapViewCorners = useMemo(() => {
+    if (!displayCutout) return null;
+    return computeVisibleSkyPolygon(
+      displayCutout.width,
+      displayCutout.height,
+      displayCutout.wcs,
+      cutoutVisibleBounds
+    );
+  }, [displayCutout, cutoutVisibleBounds]);
+
+  const handleCutoutPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!canPanCutout) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDraggingCutout(true);
+    cutoutDragRef.current = {
+      dragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startCx: cutoutViewCenter.cx,
+      startCy: cutoutViewCenter.cy,
+    };
+  };
+
+  const handleCutoutPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!cutoutDragRef.current.dragging) return;
+    const frameEl = cutoutImageFrameRef.current;
+    if (!frameEl) return;
+    const rect = frameEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const dxPx = e.clientX - cutoutDragRef.current.startX;
+    const dyPx = e.clientY - cutoutDragRef.current.startY;
+
+    const rawCx = cutoutDragRef.current.startCx - dxPx / (rect.width * totalCutoutScale);
+    const rawCy = cutoutDragRef.current.startCy - dyPx / (rect.height * totalCutoutScale);
+    const clampedCx = Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, rawCx));
+    const clampedCy = Math.min(1 - cutoutHalfSpan, Math.max(cutoutHalfSpan, rawCy));
+
+    setPanOffset({
+      x: clampedCx - cutoutAnchor.x,
+      y: clampedCy - cutoutAnchor.y,
+    });
+  };
+
+  const handleCutoutPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (cutoutDragRef.current.dragging) {
+      cutoutDragRef.current.dragging = false;
+      setIsDraggingCutout(false);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    }
+  };
 
   const handleStepFov = (direction: "in" | "out") => {
     const next = direction === "in" ? currentFov * 0.7 : currentFov / 0.7;
@@ -657,7 +800,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
           secondMapOpen={secondMapOpen}
           onToggleSecondMap={onToggleSecondMap}
           externalChannelIdx={externalChannelIdx}
-          secondMapZoom={cutoutZoom}
+          secondMapZoom={totalCutoutScale}
+          secondMapViewCorners={secondMapViewCorners}
           onChangeFov={onChangeFov}
           onSelectObservation={(obs) => onSelectVersionObservation(activeCollection, obs)}
           onQueryAtCoords={onQueryAtCoords}
@@ -810,7 +954,10 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 {currentFov < MAX_CUTOUT_FOV_DEG && (
                   <button
                     type="button"
-                    onClick={() => onChangeFov(MAX_CUTOUT_FOV_DEG)}
+                    onClick={() => {
+                      onChangeFov(MAX_CUTOUT_FOV_DEG);
+                      setPanOffset({ x: 0, y: 0 });
+                    }}
                     className="p-0.5 hover:text-white border-l border-white/10 pl-1 cursor-pointer"
                     title={t.viewer.map2FovMaxTitle}
                     aria-label={t.viewer.map2FovMaxTitle}
@@ -880,7 +1027,18 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                   </div>
                 ) : displayCutout ? (
                   <div
-                    className="relative border border-white/30 shadow-2xl"
+                    ref={cutoutImageFrameRef}
+                    onPointerDown={handleCutoutPointerDown}
+                    onPointerMove={handleCutoutPointerMove}
+                    onPointerUp={handleCutoutPointerUp}
+                    onPointerCancel={handleCutoutPointerUp}
+                    className={`relative border border-white/30 shadow-2xl touch-none ${
+                      canPanCutout
+                        ? isDraggingCutout
+                          ? "cursor-grabbing"
+                          : "cursor-grab"
+                        : "cursor-default"
+                    }`}
                     style={{
                       aspectRatio: `${displayCutout.width} / ${displayCutout.height}`,
                       ...(displayCutout.width >= displayCutout.height
@@ -894,10 +1052,8 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           src={prevCutoutUrl}
                           alt=""
                           aria-hidden="true"
-                          style={{
-                            transform: `scale(${cutoutZoom})`,
-                            transformOrigin: "center center",
-                          }}
+                          draggable={false}
+                          style={cutoutTransformStyle}
                           className="absolute inset-0 w-full h-full object-fill block [image-rendering:pixelated] pointer-events-none"
                         />
                       )}
@@ -905,20 +1061,22 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         key={displayCutout.dataUrl}
                         src={displayCutout.dataUrl}
                         alt={t.viewer.altCutout}
-                        style={{
-                          transform: `scale(${cutoutZoom})`,
-                          transformOrigin: "center center",
-                        }}
-                        className="relative w-full h-full object-fill block [image-rendering:pixelated] transition-transform duration-150"
+                        draggable={false}
+                        style={cutoutTransformStyle}
+                        className={`relative w-full h-full object-fill block [image-rendering:pixelated] pointer-events-none ${
+                          isDraggingCutout ? "" : "transition-transform duration-150"
+                        }`}
                       />
 
                       {/* Target Coordinate Reticle */}
                       {showCrosshair && targetFraction && (
                         <div
-                          className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 transition-all duration-150"
+                          className={`absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 ${
+                            isDraggingCutout ? "" : "transition-all duration-150"
+                          }`}
                           style={{
-                            left: `${(0.5 + (targetFraction.xFrac - 0.5) * cutoutZoom) * 100}%`,
-                            top: `${(0.5 + (targetFraction.yFrac - 0.5) * cutoutZoom) * 100}%`,
+                            left: `${(0.5 + (targetFraction.xFrac - cutoutViewCenter.cx) * totalCutoutScale) * 100}%`,
+                            top: `${(0.5 + (targetFraction.yFrac - cutoutViewCenter.cy) * totalCutoutScale) * 100}%`,
                           }}
                         >
                           <div className="relative flex items-center justify-center">
@@ -1064,10 +1222,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                       >
                         <ZoomOut className="w-3.5 h-3.5" />
                       </button>
-                      {cutoutZoom !== 1 && (
+                      {(cutoutZoom !== 1 ||
+                        Math.abs(panOffset.x) > 1e-4 ||
+                        Math.abs(panOffset.y) > 1e-4) && (
                         <button
                           type="button"
-                          onClick={() => setCutoutZoom(1)}
+                          onClick={() => {
+                            setCutoutZoom(1);
+                            setPanOffset({ x: 0, y: 0 });
+                          }}
                           className="p-0.5 hover:text-white border-l border-white/10 pl-1 cursor-pointer"
                           title={t.viewer.visualZoomReset}
                         >
@@ -1094,6 +1257,25 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           lastCoords
                         )
                       : null;
+                  const bandHalfSpan = Math.min(0.5, 0.5 / fovScale);
+                  const bandAnchorX = Math.min(
+                    1 - bandHalfSpan,
+                    Math.max(bandHalfSpan, bandTarget?.xFrac ?? 0.5)
+                  );
+                  const bandAnchorY = Math.min(
+                    1 - bandHalfSpan,
+                    Math.max(bandHalfSpan, bandTarget?.yFrac ?? 0.5)
+                  );
+                  const bandCx = Math.min(
+                    1 - bandHalfSpan,
+                    Math.max(bandHalfSpan, bandAnchorX + panOffset.x)
+                  );
+                  const bandCy = Math.min(
+                    1 - bandHalfSpan,
+                    Math.max(bandHalfSpan, bandAnchorY + panOffset.y)
+                  );
+                  const bandTx = (0.5 - bandCx) * fovScale * 100;
+                  const bandTy = (0.5 - bandCy) * fovScale * 100;
                   return (
                     <button
                       key={key}
@@ -1111,7 +1293,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                       <div className="relative w-full aspect-square bg-black flex items-center justify-center overflow-hidden">
                         {entry?.status === "ready" && entry.cutout ? (
                           <div
-                            className="relative max-w-full max-h-full"
+                            className="relative max-w-full max-h-full overflow-hidden"
                             style={{
                               aspectRatio: `${entry.cutout.width} / ${entry.cutout.height}`,
                               ...(entry.cutout.width >= entry.cutout.height
@@ -1122,14 +1304,18 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                             <img
                               src={entry.cutout.dataUrl}
                               alt={obs.bandpass}
+                              style={{
+                                transform: `translate(${bandTx}%, ${bandTy}%) scale(${fovScale})`,
+                                transformOrigin: "center center",
+                              }}
                               className="w-full h-full object-fill block [image-rendering:pixelated]"
                             />
                             {showCrosshair && bandTarget && (
                               <div
                                 className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2"
                                 style={{
-                                  left: `${bandTarget.xFrac * 100}%`,
-                                  top: `${bandTarget.yFrac * 100}%`,
+                                  left: `${(0.5 + (bandTarget.xFrac - bandCx) * fovScale) * 100}%`,
+                                  top: `${(0.5 + (bandTarget.yFrac - bandCy) * fovScale) * 100}%`,
                                 }}
                               >
                                 <div className="relative flex items-center justify-center">
