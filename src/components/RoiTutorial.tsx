@@ -168,7 +168,7 @@ export const RoiTutorial: React.FC<RoiTutorialProps> = ({ open, activeTab, onClo
         e.preventDefault();
         e.stopPropagation();
         onClose();
-      } else if (e.key === "ArrowRight") {
+      } else if (e.key === "ArrowRight" || e.key.toLowerCase() === "t") {
         e.preventDefault();
         if (stepIndex < availableSteps.length - 1) {
           setStepIndex((i) => i + 1);

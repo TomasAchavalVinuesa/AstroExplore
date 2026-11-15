@@ -1513,7 +1513,7 @@ export default function App() {
       <section
         id="screen-explorer"
         className={`screen ${currentScreen === "explorer" ? "is-active" : "is-hidden"
-          } p-5 pt-16 sm:p-7 sm:pt-16 flex-col lg:flex-row`}
+          } p-5 pt-16 pb-[68px] sm:p-7 sm:pt-16 sm:pb-[68px] flex-col lg:flex-row`}
       >
         <div
           aria-hidden={!sidebarOpen}

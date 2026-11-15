@@ -179,8 +179,12 @@ export const EntryTutorial: React.FC<EntryTutorialProps> = ({ active }) => {
       if (e.key === "Escape") {
         e.preventDefault();
         markSeenAndClose();
+      } else if (phase === "welcome" && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        setPhase("steps");
+        setStepIndex(0);
       } else if (phase === "steps") {
-        if (e.key === "ArrowRight") {
+        if (e.key === "ArrowRight" || e.key.toLowerCase() === "t") {
           e.preventDefault();
           if (stepIndex < TUTORIAL_STEPS.length - 1) {
             setStepIndex((i) => i + 1);

@@ -147,7 +147,7 @@ export const SidebarTutorial: React.FC<SidebarTutorialProps> = ({ open, onClose 
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
-      } else if (e.key === "ArrowRight") {
+      } else if (e.key === "ArrowRight" || e.key.toLowerCase() === "t") {
         e.preventDefault();
         if (stepIndex < availableSteps.length - 1) {
           setStepIndex((i) => i + 1);

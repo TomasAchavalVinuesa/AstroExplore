@@ -190,8 +190,12 @@ export const ExplorerTutorial: React.FC<ExplorerTutorialProps> = ({
       if (e.key === "Escape") {
         e.preventDefault();
         closeTutorial();
+      } else if (phase === "welcome" && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        setPhase("steps");
+        setStepIndex(0);
       } else if (phase === "steps") {
-        if (e.key === "ArrowRight") {
+        if (e.key === "ArrowRight" || e.key.toLowerCase() === "t") {
           e.preventDefault();
           if (stepIndex < EXPLORER_STEPS.length - 1) {
             setStepIndex((i) => i + 1);
