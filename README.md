@@ -19,7 +19,7 @@
 
 ## 🚀 Overview
 
-**AstroExplore (CHRONO-SPHEREx)** is a client-side, open-source astronomical web platform built to unlock **NASA's SPHEREx** all-sky spectral survey (102 near-infrared spectral channels spanning $0.75 - 5.00\,\mu\text{m}$ across 6 Linear Variable Filter detector arrays) for students, educators, and citizen scientists.
+**AstroExplore** is a client-side, open-source astronomical web platform built to unlock **NASA's SPHEREx** all-sky spectral survey (102 near-infrared spectral channels spanning $0.75 - 5.00\,\mu\text{m}$ across 6 Linear Variable Filter detector arrays) for students, educators, and citizen scientists.
 
 By decoding raw multi-extension FITS archives from **NASA/IPAC IRSA** directly in the browser—with no heavy backend required—the platform turns complex infrared survey data into an interactive sky workspace for hunting moving sub-stellar bodies (brown dwarfs, Planet Nine candidates, asteroids), inspecting multi-epoch variability, and performing on-the-fly spectroscopic, thermodynamic, astrochemical, and astrobiological analysis.
 
