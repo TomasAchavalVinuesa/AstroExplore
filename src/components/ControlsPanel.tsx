@@ -26,23 +26,6 @@ import {
 import { useLanguage } from "../i18n/LanguageContext";
 import { ShareButton } from "./ShareButton";
 
-export interface MoleculeSignature {
-  id: "h2o" | "co2" | "co" | "ch3oh" | "ch4" | "nh3" | "pahs";
-  color: string;
-  band: string;
-  wavelengthUm: number;
-}
-
-export const MOLECULE_SIGNATURES: MoleculeSignature[] = [
-  { id: "h2o", color: "#38BDF8", band: "D4", wavelengthUm: 3.05 },
-  { id: "co2", color: "#A78BFA", band: "D5", wavelengthUm: 4.25 },
-  { id: "co", color: "#FB923C", band: "D6", wavelengthUm: 4.67 },
-  { id: "ch3oh", color: "#F472B6", band: "D4", wavelengthUm: 3.53 },
-  { id: "ch4", color: "#34D399", band: "D4", wavelengthUm: 3.32 },
-  { id: "nh3", color: "#FFB703", band: "D4", wavelengthUm: 2.96 },
-  { id: "pahs", color: "#00D2FF", band: "D4", wavelengthUm: 3.29 },
-];
-
 interface ControlsPanelProps {
   raInput: string;
   setRaInput: (val: string) => void;
@@ -69,8 +52,6 @@ interface ControlsPanelProps {
   resolvedObject: ResolvedCelestialObject | null;
   activePresetId: string | null;
   totalFound?: number;
-  activeMolecules?: Set<string>;
-  onToggleMolecule?: (mol: MoleculeSignature) => void;
   onClose?: () => void;
   onChangeFov?: (newSize: number) => void;
   onSubmitCoords?: (raStr: string, decStr: string) => void;
@@ -103,8 +84,6 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   resolvedObject,
   activePresetId,
   totalFound = 0,
-  activeMolecules: externalMolecules,
-  onToggleMolecule,
   onClose,
   onChangeFov,
   onSubmitCoords,
@@ -116,10 +95,7 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
   const { t } = useLanguage();
   const [nameQuery, setNameQuery] = useState("");
   const [combinedCoords, setCombinedCoords] = useState(`${raInput}, ${decInput}`);
-  const [localMolecules, setLocalMolecules] = useState<Set<string>>(new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
-
-  const activeMolecules = externalMolecules ?? localMolecules;
 
   useEffect(() => {
     setCombinedCoords(`${raInput}, ${decInput}`);
@@ -193,19 +169,6 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     e.preventDefault();
     if (!nameQuery.trim()) return;
     onSearchCelestialName(nameQuery.trim());
-  };
-
-  const handleMoleculeClick = (mol: MoleculeSignature) => {
-    if (onToggleMolecule) {
-      onToggleMolecule(mol);
-    } else {
-      setLocalMolecules((prev) => {
-        const next = new Set(prev);
-        if (next.has(mol.id)) next.delete(mol.id);
-        else next.add(mol.id);
-        return next;
-      });
-    }
   };
 
   const numericSize = Math.min(
@@ -345,52 +308,6 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
             }}
             className="apple-slider w-full"
           />
-        </div>
-
-        {/* Molecule Filter Buttons */}
-        <div className="pt-2 border-t border-white/10 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-300">
-              {t.chrono.molecularSignatures}
-            </span>
-            <span className="text-[10px] uppercase tracking-wider text-slate-500">
-              {activeMolecules.size > 0 ? t.chrono.activeBadge : t.chrono.standbyBadge}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 gap-1.5">
-            {MOLECULE_SIGNATURES.map((m) => {
-              const active = activeMolecules.has(m.id);
-              const label = t.chrono.molecules[m.id];
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  data-molecule={m.id}
-                  data-active={active ? "true" : "false"}
-                  onClick={() => handleMoleculeClick(m)}
-                  className="mol-btn w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-slate-300 hover:bg-white/[0.07] text-left cursor-pointer"
-                >
-                  <span className="flex items-center gap-2.5 truncate">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{
-                        background: m.color,
-                        boxShadow: `0 0 8px ${m.color}66`,
-                      }}
-                    />
-                    <span className="truncate">{label}</span>
-                  </span>
-                  <span
-                    className={`text-[10px] font-mono shrink-0 ml-2 ${
-                      active ? "text-[#00D2FF] font-semibold" : "text-slate-500"
-                    }`}
-                  >
-                    {active ? `${t.chrono.onLabel} · ${m.band}` : "—"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
         </div>
 
         {/* Collapsible Scientific & Band Controls */}

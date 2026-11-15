@@ -5,6 +5,12 @@
  * Implementado 100% en cliente con TypeScript puro, DataView y Canvas 2D.
  */
 
+import {
+  isApiDownHttpStatus,
+  isNetworkDownError,
+  isTimeoutOrAbortError,
+} from "./apiError";
+
 export const SPHEREX_HIPS_BASE_URL =
   "https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube";
 
@@ -196,6 +202,90 @@ interface TileEntry {
 const tileCache = new Map<string, TileEntry>();
 const MAX_TILE_CACHE = 320;
 
+let hipsApiDown = false;
+let consecutiveTileErrors = 0;
+let lastHealthCheckAt = 0;
+let healthCheckPromise: Promise<void> | null = null;
+const hipsStatusListeners = new Set<(isDown: boolean) => void>();
+
+function setHipsApiDown(next: boolean): void {
+  if (hipsApiDown === next) return;
+  hipsApiDown = next;
+  hipsStatusListeners.forEach((fn) => fn(next));
+}
+
+export function subscribeHipsApiStatus(listener: (isDown: boolean) => void): () => void {
+  hipsStatusListeners.add(listener);
+  listener(hipsApiDown);
+  return () => {
+    hipsStatusListeners.delete(listener);
+  };
+}
+
+export async function checkSpherexHipsApiHealth(force = false): Promise<void> {
+  if (healthCheckPromise) return healthCheckPromise;
+  const now = Date.now();
+  if (!force && now - lastHealthCheckAt < 15_000) return;
+  lastHealthCheckAt = now;
+
+  healthCheckPromise = (async () => {
+    const officialUrl = `${SPHEREX_HIPS_BASE_URL}/properties`;
+    const proxyUrl = officialUrl.replace("https://irsa.ipac.caltech.edu", "/irsa-proxy");
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException("Request timeout", "TimeoutError"));
+    }, 10_000);
+
+    try {
+      let res: Response | null = null;
+      try {
+        const proxyRes = await fetch(proxyUrl, { signal: controller.signal });
+        if (proxyRes.status !== 404) {
+          res = proxyRes;
+        }
+      } catch (err) {
+        if (isTimeoutOrAbortError(err)) {
+          return;
+        }
+      }
+
+      if (!res) {
+        res = await fetch(officialUrl, { signal: controller.signal });
+      }
+
+      if (res.ok) {
+        consecutiveTileErrors = 0;
+        setHipsApiDown(false);
+      } else if (isApiDownHttpStatus(res.status)) {
+        setHipsApiDown(true);
+      }
+    } catch (err) {
+      if (isTimeoutOrAbortError(err)) {
+        // Un timeout no implica necesariamente que la API esté caída
+        return;
+      }
+      if (isNetworkDownError(err)) {
+        setHipsApiDown(true);
+      }
+    } finally {
+      clearTimeout(timer);
+      healthCheckPromise = null;
+    }
+  })();
+
+  return healthCheckPromise;
+}
+
+export async function retryHipsApiHealth(): Promise<void> {
+  consecutiveTileErrors = 0;
+  for (const [key, entry] of tileCache.entries()) {
+    if (entry.status === "error") {
+      tileCache.delete(key);
+    }
+  }
+  await checkSpherexHipsApiHealth(true);
+}
+
 export function getOrLoadHipsTile(
   order: number,
   npix: number,
@@ -229,10 +319,16 @@ export function getOrLoadHipsTile(
   img.onload = () => {
     entry.status = "ready";
     entry.img = img;
+    consecutiveTileErrors = 0;
+    setHipsApiDown(false);
     onLoad();
   };
   img.onerror = () => {
     entry.status = "error";
+    consecutiveTileErrors += 1;
+    if (consecutiveTileErrors >= 3) {
+      void checkSpherexHipsApiHealth(false);
+    }
     setTimeout(() => {
       if (tileCache.get(url) === entry) {
         tileCache.delete(url);

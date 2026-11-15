@@ -167,6 +167,9 @@ export interface SkyRoiSelection {
   heightArcsec: number;
   epochDate?: string | null;
   epochMjd?: number | null;
+  obsId?: string | null;
+  centroidRa?: number;
+  centroidDec?: number;
 }
 
 export interface RoiSpectrumPoint {
@@ -237,4 +240,89 @@ export interface RoiComparisonResult {
   overallSimilarityPct: number | null;
   sharedDetectedFormulas: string[];
   insufficientOverlap: boolean;
+}
+
+export type TrajectoryModelType = "linear" | "quadratic";
+
+export interface ChemicalIdentityCheck {
+  compatible: boolean;
+  confidence: "high" | "moderate" | "low" | "insufficient";
+  avgSimilarityPct: number | null;
+  minSimilarityPct: number | null;
+  sharedDetectedFormulas: string[];
+  pairCount: number;
+  insufficientOverlapPairs: number;
+}
+
+export interface TrajectoryPoint {
+  readingId: string;
+  label: string;
+  ra: number;
+  dec: number;
+  epochDate: string;
+  epochMjd: number;
+  xiArcsec: number;
+  etaArcsec: number;
+  usedPhotocenter: boolean;
+}
+
+export interface TrajectorySegment {
+  fromLabel: string;
+  toLabel: string;
+  deltaDays: number;
+  distanceArcsec: number;
+  speedArcsecPerDay: number;
+  speedArcsecPerYear: number;
+  positionAngleDeg: number;
+}
+
+export interface CelestialTrajectoryResult {
+  model: TrajectoryModelType;
+  points: TrajectoryPoint[];
+  segments: TrajectorySegment[];
+  refRa: number;
+  refDec: number;
+  meanMjd: number;
+  totalSpanDays: number;
+  totalPathArcsec: number;
+  netDisplacementArcsec: number;
+  pmRaArcsecPerYear: number;
+  pmDecArcsecPerYear: number;
+  totalSpeedArcsecPerYear: number;
+  positionAngleDeg: number;
+  rmsResidualArcsec: number;
+  /** Coeficientes polinómicos en plano tangente (arcsec vs tau = mjd - meanMjd) */
+  coeffsXi: number[];
+  coeffsEta: number[];
+}
+
+export interface ExtrapolatedPosition {
+  targetDate: string;
+  targetMjd: number;
+  ra: number;
+  dec: number;
+  xiArcsec: number;
+  etaArcsec: number;
+  uncertaintyArcsec: number;
+  displacementFromLastArcsec: number;
+  displacementFromFirstArcsec: number;
+  deltaDaysFromLast: number;
+  isExtrapolation: boolean;
+}
+
+export interface Map2TabSession {
+  id: string;
+  label: string;
+  raInput: string;
+  decInput: string;
+  targetName: string;
+  resolvedObject: ResolvedCelestialObject | null;
+  lastCoords: { ra: number; dec: number; size: number } | null;
+  versions: Record<SpherexCollectionId, CollectionVersionData> | null;
+  activeCollection: SpherexCollectionId;
+  selectedIdx: number;
+  cutout: RenderedCutout | null;
+  loading: boolean;
+  cutoutLoading: boolean;
+  status: { text: string; isError: boolean } | null;
 }

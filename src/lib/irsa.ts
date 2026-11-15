@@ -12,6 +12,12 @@ import type {
 import { decompressIfNeeded } from "./fits";
 import { renderFitsBufferAsync } from "./fitsWorkerClient";
 import { mjdToUtc } from "./coordinates";
+import {
+  isApiDownHttpStatus,
+  isNetworkDownError,
+  isTimeoutOrAbortError,
+  NasaApiDownError,
+} from "./apiError";
 
 const IRSA_ORIGIN = "https://irsa.ipac.caltech.edu";
 const FITS_CACHE_NAME = "spherex-fits-v1";
@@ -159,7 +165,9 @@ async function fetchIrsaWithFallback(
       }
       // Si el servidor IBE responde 503/502/429 ("Server busy, retry later"), reintentar con backoff
       if ((res.status === 503 || res.status === 502 || res.status === 504 || res.status === 429) && attempt < MAX_RETRY_ATTEMPTS) {
-        lastError = new Error(`HTTP ${res.status}`);
+        lastError = isApiDownHttpStatus(res.status)
+          ? new NasaApiDownError("map2", `HTTP ${res.status}`, res.status)
+          : new Error(`HTTP ${res.status}`);
         continue;
       }
       return res;
@@ -169,11 +177,32 @@ async function fetchIrsaWithFallback(
       }
       lastError = err;
       if (attempt >= MAX_RETRY_ATTEMPTS) {
+        if (isTimeoutOrAbortError(err)) {
+          throw err;
+        }
+        if (isNetworkDownError(err)) {
+          throw new NasaApiDownError(
+            "map2",
+            err instanceof Error ? err.message : "Network error contacting IRSA"
+          );
+        }
         throw err;
       }
     }
   }
 
+  if (lastError instanceof NasaApiDownError) {
+    throw lastError;
+  }
+  if (isTimeoutOrAbortError(lastError)) {
+    throw lastError;
+  }
+  if (isNetworkDownError(lastError)) {
+    throw new NasaApiDownError(
+      "map2",
+      lastError instanceof Error ? lastError.message : "Network error contacting IRSA"
+    );
+  }
   throw lastError instanceof Error ? lastError : new Error("Error de red consultando IRSA");
 }
 
@@ -258,6 +287,9 @@ export async function querySpherexSIA(params: {
     const res = await fetchIrsaWithFallback(officialSiaUrl, undefined, SIA_TIMEOUT_MS);
 
     if (!res.ok) {
+      if (isApiDownHttpStatus(res.status)) {
+        throw new NasaApiDownError("map2", `IRSA SIA HTTP ${res.status}`, res.status);
+      }
       throw new Error(`IRSA SIA respondió con status HTTP ${res.status}`);
     }
 
@@ -403,6 +435,14 @@ export async function queryAllSpherexVersions(params: {
       };
     }
   });
+
+  const apiDownRejection = settled.find(
+    (item): item is PromiseRejectedResult =>
+      item.status === "rejected" && item.reason instanceof NasaApiDownError
+  );
+  if (availableCollections.length === 0 && apiDownRejection) {
+    throw apiDownRejection.reason;
+  }
 
   let recommendedCollection: SpherexCollectionId = collectionMode;
 
@@ -586,6 +626,9 @@ async function fetchFitsBuffer(options: {
     const downloadPromise = scheduleDownload(priority, async () => {
       const res = await fetchIrsaWithFallback(officialCutoutUrl, controller.signal, FITS_TIMEOUT_MS);
       if (!res.ok) {
+        if (isApiDownHttpStatus(res.status)) {
+          throw new NasaApiDownError("map2", `IRSA IBE Cutout HTTP ${res.status}`, res.status);
+        }
         throw new Error(`IRSA IBE Cutout respondió con status HTTP ${res.status}`);
       }
       const rawArrayBuffer = await res.arrayBuffer();

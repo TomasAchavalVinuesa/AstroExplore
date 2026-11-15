@@ -209,6 +209,9 @@ export interface Translations {
     fitsInvalidDimensions: string;
     fitsAllNan: string;
     fitsCanvasError: string;
+    map1ApiDown: string;
+    map2ApiDown: string;
+    retryApi: string;
   };
   chrono: {
     entryTitle: string;
@@ -239,6 +242,10 @@ export interface Translations {
     epochLabel: string;
     speedLabel: string;
     playPauseAria: string;
+    prevFrameAria: string;
+    nextFrameAria: string;
+    enterFullscreen: string;
+    exitFullscreen: string;
     splitSecondMapButton: string;
     closeSecondMapButton: string;
     map1Title: string;
@@ -365,7 +372,7 @@ export const translations: Record<Language, Translations> = {
       decAxisLabel: "Dec (ICRS)",
       emptyTitle: "Aún no se ha realizado ninguna consulta",
       emptySubtitle:
-        "Selecciona un cuerpo celeste como Barnard's Star, Epsilon Indi B, WISE 0855, RW Aurigae o R Draconis para visualizar sus recortes FITS en todas las versiones disponibles.",
+        "Selecciona un cuerpo celeste o escribe coordenadas para visualizar sus imágenes detalladas",
       detectorBand: "Detector / Banda",
       wavelength: "Longitud de onda",
       infrared: "Infrarrojo",
@@ -505,6 +512,11 @@ export const translations: Record<Language, Translations> = {
       fitsInvalidDimensions: "Dimensiones de imagen FITS inválidas.",
       fitsAllNan: "Todos los píxeles del recorte son NaN o vacíos.",
       fitsCanvasError: "No se pudo inicializar contexto 2D de Canvas.",
+      map1ApiDown:
+        "La API de la NASA/IRSA para el Mapa 1 (HiPS) está caída o no responde en este momento.",
+      map2ApiDown:
+        "La API de la NASA/IRSA para el Mapa 2 (SIA / Cutouts) está caída o no responde en este momento.",
+      retryApi: "Reintentar",
     },
     chrono: {
       entryTitle: "Explora el espacio",
@@ -535,6 +547,10 @@ export const translations: Record<Language, Translations> = {
       epochLabel: "Época",
       speedLabel: "Velocidad",
       playPauseAria: "Reproducir o Pausar",
+      prevFrameAria: "Imagen anterior",
+      nextFrameAria: "Imagen siguiente",
+      enterFullscreen: "Ver en pantalla completa",
+      exitFullscreen: "Salir de pantalla completa",
       splitSecondMapButton: "Abrir 2º Mapa (Dividir Vista)",
       closeSecondMapButton: "Cerrar 2º Mapa",
       map1Title: "Mapa 1 · Cielo HiPS / MOC",
@@ -757,7 +773,7 @@ export const translations: Record<Language, Translations> = {
       decAxisLabel: "Dec (ICRS)",
       emptyTitle: "No query performed yet",
       emptySubtitle:
-        "Select a celestial body such as Barnard's Star, Epsilon Indi B, WISE 0855, RW Aurigae, or R Draconis to view its FITS cutouts across all available versions.",
+        "Select a celestial body or enter coordinates to view its detailed images",
       detectorBand: "Detector / Band",
       wavelength: "Wavelength",
       infrared: "Infrared",
@@ -897,6 +913,11 @@ export const translations: Record<Language, Translations> = {
       fitsInvalidDimensions: "Invalid FITS image dimensions.",
       fitsAllNan: "All pixels in cutout are NaN or empty.",
       fitsCanvasError: "Could not initialize Canvas 2D context.",
+      map1ApiDown:
+        "The NASA/IRSA API for Map 1 (HiPS) is currently down or unreachable.",
+      map2ApiDown:
+        "The NASA/IRSA API for Map 2 (SIA / Cutouts) is currently down or unreachable.",
+      retryApi: "Retry",
     },
     chrono: {
       entryTitle: "Explore the space",
@@ -927,6 +948,10 @@ export const translations: Record<Language, Translations> = {
       epochLabel: "Epoch",
       speedLabel: "Speed",
       playPauseAria: "Play or Pause",
+      prevFrameAria: "Previous image",
+      nextFrameAria: "Next image",
+      enterFullscreen: "View fullscreen",
+      exitFullscreen: "Exit fullscreen",
       splitSecondMapButton: "Open 2nd Map (Split View)",
       closeSecondMapButton: "Close 2nd Map",
       map1Title: "Map 1 · HiPS / MOC Sky",

@@ -1,30 +1,43 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
   Bookmark,
+  Calendar,
   Check,
   CheckCircle2,
   FlaskConical,
   GitCompareArrows,
   Loader2,
+  MapPin,
   ScanSearch,
   Trash2,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
 import { formatDectoDMS, formatRAtoHMS } from "../lib/coordinates";
 import { compareRoiReadings } from "../lib/spectralAnalysis";
+import {
+  addDaysToDateString,
+  computeCelestialTrajectory,
+  extrapolatePositionAtDate,
+  mjdToDateString,
+  validateSameCelestialBody,
+} from "../lib/trajectory";
 import type {
+  CelestialTrajectoryResult,
   ChemicalDetectionStatus,
+  ExtrapolatedPosition,
   RoiChemicalAnalysisResult,
   SavedRoiReading,
   SkyRoiSelection,
+  TrajectoryModelType,
 } from "../lib/types";
 
 interface RoiAnalysisModalProps {
   isOpen: boolean;
-  initialTab?: "current" | "compare";
+  initialTab?: "current" | "compare" | "trajectory";
   roi: SkyRoiSelection | null;
   analysis: RoiChemicalAnalysisResult | null;
   targetName: string;
@@ -38,6 +51,10 @@ interface RoiAnalysisModalProps {
   onScanAllBands: () => void;
   onCancelScan: () => void;
   onClearRoi: () => void;
+  onShowTrajectoryOnMap?: (
+    trajectory: CelestialTrajectoryResult,
+    extrapolated: ExtrapolatedPosition | null
+  ) => void;
   onClose: () => void;
 }
 
@@ -57,15 +74,19 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
   onScanAllBands,
   onCancelScan,
   onClearRoi,
+  onShowTrajectoryOnMap,
   onClose,
 }) => {
   const { language } = useLanguage();
   const isEn = language === "en";
-  const [activeTab, setActiveTab] = useState<"current" | "compare">(initialTab);
+  const [activeTab, setActiveTab] = useState<"current" | "compare" | "trajectory">(initialTab);
   const [proportionMode, setProportionMode] = useState<"spectral" | "molar">("spectral");
   const [saveName, setSaveName] = useState<string>("");
   const [compareIdA, setCompareIdA] = useState<string>("");
   const [compareIdB, setCompareIdB] = useState<string>("");
+  const [selectedTrajectoryIds, setSelectedTrajectoryIds] = useState<Set<string>>(() => new Set());
+  const [trajectoryModel, setTrajectoryModel] = useState<TrajectoryModelType>("linear");
+  const [targetDateInput, setTargetDateInput] = useState<string>("");
 
   useEffect(() => {
     if (isOpen) {
@@ -117,6 +138,68 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
     return compareRoiReadings(readingA, readingB);
   }, [readingA, readingB]);
 
+  const epochComparableReadings = useMemo(
+    () =>
+      comparablePool.filter(
+        (r) =>
+          r.roi.epochMjd !== null &&
+          r.roi.epochMjd !== undefined &&
+          Number.isFinite(r.roi.epochMjd)
+      ),
+    [comparablePool]
+  );
+
+  const knownTrajectoryIdsRef = useRef<Set<string>>(new Set());
+
+  // Auto-select newly added readings with epochs (supports 2, 3, 4+ areas)
+  useEffect(() => {
+    if (epochComparableReadings.length === 0) return;
+    setSelectedTrajectoryIds((prev) => {
+      const next = new Set(
+        [...prev].filter((id) => epochComparableReadings.some((r) => r.id === id))
+      );
+      for (const r of epochComparableReadings) {
+        if (!knownTrajectoryIdsRef.current.has(r.id)) {
+          next.add(r.id);
+        }
+      }
+      knownTrajectoryIdsRef.current = new Set(epochComparableReadings.map((r) => r.id));
+      return next;
+    });
+  }, [epochComparableReadings]);
+
+  const selectedTrajectoryReadings = useMemo(
+    () => epochComparableReadings.filter((r) => selectedTrajectoryIds.has(r.id)),
+    [epochComparableReadings, selectedTrajectoryIds]
+  );
+
+  const distinctTrajectoryEpochs = useMemo(
+    () =>
+      new Set(selectedTrajectoryReadings.map((r) => (r.roi.epochMjd ?? 0).toFixed(4))).size,
+    [selectedTrajectoryReadings]
+  );
+
+  const identityCheck = useMemo(
+    () => validateSameCelestialBody(selectedTrajectoryReadings),
+    [selectedTrajectoryReadings]
+  );
+
+  const trajectoryResult = useMemo(() => {
+    if (!identityCheck.compatible || selectedTrajectoryReadings.length < 2) return null;
+    return computeCelestialTrajectory(selectedTrajectoryReadings, trajectoryModel);
+  }, [identityCheck.compatible, selectedTrajectoryReadings, trajectoryModel]);
+
+  useEffect(() => {
+    if (!trajectoryResult || targetDateInput) return;
+    const lastMjd = trajectoryResult.points[trajectoryResult.points.length - 1].epochMjd;
+    setTargetDateInput(mjdToDateString(lastMjd + 90));
+  }, [trajectoryResult, targetDateInput]);
+
+  const extrapolatedPosition = useMemo(() => {
+    if (!trajectoryResult || !targetDateInput) return null;
+    return extrapolatePositionAtDate(trajectoryResult, targetDateInput);
+  }, [trajectoryResult, targetDateInput]);
+
   const activeProportionMode =
     proportionMode === "molar" && analysis?.hasMolarProportions ? "molar" : "spectral";
 
@@ -167,11 +250,11 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
     const pathD =
       pts.length >= 2
         ? pts
-            .map(
-              (p, idx) =>
-                `${idx === 0 ? "M" : "L"} ${toX(p.waveUm).toFixed(1)} ${toY(p.flux).toFixed(1)}`
-            )
-            .join(" ")
+          .map(
+            (p, idx) =>
+              `${idx === 0 ? "M" : "L"} ${toX(p.waveUm).toFixed(1)} ${toY(p.flux).toFixed(1)}`
+          )
+          .join(" ")
         : "";
     return { pts, w, h, pl, pr, pt, pb, pw, ph, yMin, yMax, toX, toY, pathD };
   }, [analysis?.spectrumPoints]);
@@ -254,11 +337,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setActiveTab("current")}
-                  className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${
-                    activeTab === "current"
+                  className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${activeTab === "current"
                       ? "bg-[#00D2FF]/20 text-[#00D2FF] font-semibold"
                       : "text-slate-400 hover:text-white"
-                  }`}
+                    }`}
                 >
                   {isEn ? "Current Area" : "Área Actual"}
                 </button>
@@ -266,11 +348,10 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab("compare")}
-                className={`px-2.5 py-1 rounded-[9px] cursor-pointer flex items-center gap-1 transition-colors ${
-                  activeTab === "compare"
+                className={`px-2.5 py-1 rounded-[9px] cursor-pointer flex items-center gap-1 transition-colors ${activeTab === "compare"
                     ? "bg-emerald-500/20 text-emerald-300 font-semibold"
                     : "text-slate-400 hover:text-white"
-                }`}
+                  }`}
               >
                 <GitCompareArrows className="w-3 h-3" />
                 <span>
@@ -278,6 +359,17 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                     ? `Compare (${savedReadings.length})`
                     : `Comparar (${savedReadings.length})`}
                 </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("trajectory")}
+                className={`px-2.5 py-1 rounded-[9px] cursor-pointer flex items-center gap-1 transition-colors ${activeTab === "trajectory"
+                    ? "bg-amber-500/20 text-amber-300 font-semibold"
+                    : "text-slate-400 hover:text-white"
+                  }`}
+              >
+                <TrendingUp className="w-3 h-3" />
+                <span>{isEn ? "Trajectory" : "Trayectoria"}</span>
               </button>
             </div>
 
@@ -522,22 +614,20 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                       <button
                         type="button"
                         onClick={() => setProportionMode("spectral")}
-                        className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${
-                          activeProportionMode === "spectral"
+                        className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${activeProportionMode === "spectral"
                             ? "bg-[#00D2FF]/20 text-[#00D2FF] font-semibold"
                             : "text-slate-400 hover:text-white"
-                        }`}
+                          }`}
                       >
                         {isEn ? "Spectral Weight (W_λ)" : "Peso Espectral (W_λ)"}
                       </button>
                       <button
                         type="button"
                         onClick={() => setProportionMode("molar")}
-                        className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${
-                          activeProportionMode === "molar"
+                        className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${activeProportionMode === "molar"
                             ? "bg-emerald-500/20 text-emerald-300 font-semibold"
                             : "text-slate-400 hover:text-white"
-                        }`}
+                          }`}
                       >
                         {isEn ? "Ice Molar Ratio (N_i)" : "Proporción Molar Hielos (N_i)"}
                       </button>
@@ -581,9 +671,8 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                           </div>
                           <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${
-                                s.status === "detected" ? "bg-emerald-400" : "bg-amber-400"
-                              }`}
+                              className={`h-full rounded-full transition-all ${s.status === "detected" ? "bg-emerald-400" : "bg-amber-400"
+                                }`}
                               style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
                             />
                           </div>
@@ -682,7 +771,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                 </div>
               )}
             </>
-          ) : (
+          ) : activeTab === "compare" ? (
             /* COMPARE READINGS TAB */
             <div className="space-y-4">
               {comparablePool.length < 2 ? (
@@ -712,13 +801,13 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         onChange={(e) => setCompareIdA(e.target.value)}
                         className="w-full rounded-xl bg-black/60 border border-white/15 px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00D2FF]"
                       >
-                      {comparablePool.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                          {r.roi.epochDate ? ` · ${r.roi.epochDate}` : ""} (
-                          {r.analysis.coveredChannelsCount}/102 ch)
-                        </option>
-                      ))}
+                        {comparablePool.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                            {r.roi.epochDate ? ` · ${r.roi.epochDate}` : ""} (
+                            {r.analysis.coveredChannelsCount}/102 ch)
+                          </option>
+                        ))}
                       </select>
                     </div>
 
@@ -731,13 +820,13 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         onChange={(e) => setCompareIdB(e.target.value)}
                         className="w-full rounded-xl bg-black/60 border border-white/15 px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400"
                       >
-                      {comparablePool.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                          {r.roi.epochDate ? ` · ${r.roi.epochDate}` : ""} (
-                          {r.analysis.coveredChannelsCount}/102 ch)
-                        </option>
-                      ))}
+                        {comparablePool.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                            {r.roi.epochDate ? ` · ${r.roi.epochDate}` : ""} (
+                            {r.analysis.coveredChannelsCount}/102 ch)
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -805,13 +894,12 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                           </div>
 
                           <div
-                            className={`rounded-xl p-3 text-xs border ${
-                              comparison.overallSimilarityPct >= 85
+                            className={`rounded-xl p-3 text-xs border ${comparison.overallSimilarityPct >= 85
                                 ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200"
                                 : comparison.overallSimilarityPct >= 60
                                   ? "bg-amber-500/15 border-amber-400/40 text-amber-200"
                                   : "bg-rose-500/15 border-rose-400/40 text-rose-200"
-                            }`}
+                              }`}
                           >
                             {comparison.overallSimilarityPct >= 85
                               ? isEn
@@ -884,6 +972,364 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                     ))}
                   </div>
                 </div>
+              )}
+            </div>
+          ) : (
+            /* TRAJECTORY & EXTRAPOLATION TAB */
+            <div className="space-y-4">
+              {epochComparableReadings.length < 2 ? (
+                <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-6 text-center space-y-2">
+                  <TrendingUp className="w-7 h-7 text-amber-300 mx-auto opacity-85" />
+                  <p className="text-sm font-medium text-white">
+                    {isEn
+                      ? "Save at least 2 areas from different image dates"
+                      : "Guardá al menos 2 áreas de distintas fechas de imagen"}
+                  </p>
+                  <p className="text-xs text-slate-400 max-w-lg mx-auto">
+                    {isEn
+                      ? "Select an area on one epoch image and save it, then switch to another date, select the body's area there and save it. If their chemical composition matches, we will trace its motion and extrapolate its position to any target date."
+                      : "Seleccioná un área en una imagen/época y guardala; luego cambiá a otra fecha, seleccioná el área del cuerpo celeste ahí y guardala. Si coinciden en composición química, trazaremos su movimiento y extrapolaremos su posición a otra fecha."}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Step 1: Multi-select readings (1 per image/epoch) */}
+                  <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-xs font-semibold text-white">
+                        {isEn
+                          ? "1. Select 2 or more areas across epochs (1 per image)"
+                          : "1. Seleccioná 2 o más áreas por época (1 por imagen)"}
+                      </h4>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {selectedTrajectoryReadings.length}/{epochComparableReadings.length}{" "}
+                          {isEn ? "selected" : "seleccionadas"} · {distinctTrajectoryEpochs}{" "}
+                          {isEn ? "distinct epochs" : "épocas distintas"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedTrajectoryIds(
+                              new Set(epochComparableReadings.map((r) => r.id))
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/15 text-[10px] text-slate-200 cursor-pointer"
+                        >
+                          {isEn ? "All" : "Todas"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTrajectoryIds(new Set())}
+                          className="px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/15 text-[10px] text-slate-300 cursor-pointer"
+                        >
+                          {isEn ? "None" : "Ninguna"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
+                      {epochComparableReadings.map((r) => {
+                        const checked = selectedTrajectoryIds.has(r.id);
+                        const ra = r.roi.centroidRa ?? r.roi.centerRa;
+                        const dec = r.roi.centroidDec ?? r.roi.centerDec;
+                        return (
+                          <label
+                            key={r.id}
+                            className={`flex items-start gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer transition-colors ${checked
+                                ? "bg-amber-500/10 border-amber-400/45 text-white"
+                                : "bg-black/40 border-white/10 text-slate-300 hover:bg-white/[0.04]"
+                              }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setSelectedTrajectoryIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(r.id)) next.delete(r.id);
+                                  else next.add(r.id);
+                                  return next;
+                                });
+                              }}
+                              className="mt-0.5 accent-amber-400 cursor-pointer"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold truncate">{r.name}</div>
+                              <div className="text-[10px] font-mono text-slate-400 truncate">
+                                {r.roi.epochDate ?? mjdToDateString(r.roi.epochMjd!)} ·{" "}
+                                {r.analysis.coveredChannelsCount}/102 ch
+                              </div>
+                              <div className="text-[10px] font-mono text-[#00D2FF]/90 truncate">
+                                RA {formatRAtoHMS(ra)} · Dec {formatDectoDMS(dec)}
+                                {r.roi.centroidRa !== undefined
+                                  ? isEn
+                                    ? " (photocenter)"
+                                    : " (fotocentro)"
+                                  : ""}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Step 2: Chemical Identity Verification */}
+                  {selectedTrajectoryReadings.length >= 2 && (
+                    <div
+                      className={`rounded-2xl border p-4 space-y-2 ${identityCheck.confidence === "high"
+                          ? "bg-emerald-500/10 border-emerald-400/40"
+                          : identityCheck.confidence === "moderate"
+                            ? "bg-amber-500/10 border-amber-400/40"
+                            : "bg-rose-500/10 border-rose-400/40"
+                        }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                          {identityCheck.compatible ? (
+                            <CheckCircle2
+                              className={`w-4 h-4 ${identityCheck.confidence === "high"
+                                  ? "text-emerald-300"
+                                  : "text-amber-300"
+                                }`}
+                            />
+                          ) : (
+                            <AlertTriangle className="w-4 h-4 text-rose-300" />
+                          )}
+                          <span>
+                            {isEn
+                              ? "2. Chemical Identity Verification"
+                              : "2. Verificación de Identidad Química"}
+                          </span>
+                        </div>
+                        {identityCheck.avgSimilarityPct !== null && (
+                          <span className="font-mono text-xs text-white">
+                            {isEn ? "Avg:" : "Prom:"} {identityCheck.avgSimilarityPct.toFixed(1)}% ·{" "}
+                            {isEn ? "Min:" : "Mín:"} {identityCheck.minSimilarityPct?.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-200">
+                        {identityCheck.confidence === "high"
+                          ? isEn
+                            ? "Confirmed: all selected areas share a compatible infrared chemical & spectral signature (same celestial body)."
+                            : "Confirmado: todas las áreas seleccionadas comparten una firma espectral y química compatible (mismo cuerpo celeste)."
+                          : identityCheck.confidence === "moderate"
+                            ? isEn
+                              ? "Moderately compatible: partial spectral/chemical match. Trajectory can be traced, though verify that all boxes center on the same object."
+                              : "Compatibilidad moderada: coincidencia espectral/química parcial. Se habilita el trazado, pero verificá que todas las cajas apunten al mismo objeto."
+                            : identityCheck.confidence === "insufficient"
+                              ? isEn
+                                ? "Insufficient overlapping spectral channels across the selected areas to verify chemical identity."
+                                : "Canales espectrales solapados insuficientes entre las áreas seleccionadas para verificar identidad química."
+                              : isEn
+                                ? "Chemical mismatch: the selected areas do not appear to belong to the same celestial body (< 60% similarity). Trajectory tracing is disabled."
+                                : "Diferencia química detectada: las áreas seleccionadas no parecen corresponder al mismo cuerpo celeste (< 60% de similitud). Trazado deshabilitado."}
+                      </p>
+
+                      {identityCheck.sharedDetectedFormulas.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <span className="text-slate-300">
+                            {isEn ? "Shared species:" : "Especies en común:"}
+                          </span>
+                          {identityCheck.sharedDetectedFormulas.map((f) => (
+                            <span
+                              key={f}
+                              className="px-2 py-0.5 rounded-full bg-black/40 border border-white/15 font-mono text-emerald-200"
+                            >
+                              {f}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Step 3: Trajectory & Extrapolation */}
+                  {identityCheck.compatible && trajectoryResult && (
+                    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <h4 className="text-xs font-semibold text-white">
+                          {isEn
+                            ? "3. Observed Motion & Date Extrapolation"
+                            : "3. Movimiento Realizado y Extrapolación a Fecha"}
+                        </h4>
+                        <div className="inline-flex items-center p-0.5 rounded-xl bg-black/50 border border-white/10 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => setTrajectoryModel("linear")}
+                            className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors ${trajectoryModel === "linear"
+                                ? "bg-[#00D2FF]/20 text-[#00D2FF] font-semibold"
+                                : "text-slate-400 hover:text-white"
+                              }`}
+                          >
+                            {isEn ? "Linear (Proper Motion)" : "Lineal (Mov. Propio)"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={distinctTrajectoryEpochs < 3}
+                            onClick={() => setTrajectoryModel("quadratic")}
+                            className={`px-2.5 py-1 rounded-[9px] cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${trajectoryModel === "quadratic"
+                                ? "bg-amber-500/20 text-amber-300 font-semibold"
+                                : "text-slate-400 hover:text-white"
+                              }`}
+                            title={
+                              distinctTrajectoryEpochs < 3
+                                ? isEn
+                                  ? "Requires at least 3 distinct epochs"
+                                  : "Requiere al menos 3 épocas distintas"
+                                : undefined
+                            }
+                          >
+                            {isEn ? "Quadratic (≥3 epochs)" : "Cuadrático (≥3 épocas)"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Observed kinematics metrics */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                        <div className="rounded-xl bg-black/45 border border-white/10 p-2.5">
+                          <div className="text-[10px] text-slate-400">
+                            {isEn ? "Total Span" : "Lapso Total"}
+                          </div>
+                          <div className="text-white font-semibold mt-0.5">
+                            {trajectoryResult.totalSpanDays.toFixed(1)} d
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-black/45 border border-white/10 p-2.5">
+                          <div className="text-[10px] text-slate-400">
+                            {isEn ? "Net Displacement" : "Desplaz. Neto"}
+                          </div>
+                          <div className="text-[#00D2FF] font-semibold mt-0.5">
+                            {trajectoryResult.netDisplacementArcsec.toFixed(2)}″
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-black/45 border border-white/10 p-2.5">
+                          <div className="text-[10px] text-slate-400">
+                            {isEn ? "Apparent Speed" : "Velocidad Aparente"}
+                          </div>
+                          <div className="text-emerald-300 font-semibold mt-0.5">
+                            {trajectoryResult.totalSpeedArcsecPerYear.toFixed(2)}″/yr
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-black/45 border border-white/10 p-2.5">
+                          <div className="text-[10px] text-slate-400">
+                            {isEn ? "Direction (PA)" : "Dirección (PA)"}
+                          </div>
+                          <div className="text-amber-300 font-semibold mt-0.5">
+                            {trajectoryResult.positionAngleDeg.toFixed(1)}°
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Observed segments breakdown when 3+ areas are selected */}
+                      {trajectoryResult.segments.length >= 2 && (
+                        <div className="rounded-xl bg-black/35 border border-white/10 p-2.5 space-y-1.5">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                            {isEn
+                              ? `Observed Trajectory Segments (${trajectoryResult.segments.length})`
+                              : `Tramos Observados (${trajectoryResult.segments.length})`}
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] font-mono">
+                            {trajectoryResult.segments.map((seg, i) => (
+                              <div
+                                key={`${seg.fromLabel}-${seg.toLabel}-${i}`}
+                                className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-white/[0.03] text-slate-300"
+                              >
+                                <span className="truncate">
+                                  {i + 1}→{i + 2}: {seg.fromLabel} → {seg.toLabel}
+                                </span>
+                                <span className="text-[#00D2FF] shrink-0">
+                                  {seg.distanceArcsec.toFixed(2)}″ ({seg.deltaDays.toFixed(1)}d)
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Target Date Picker + Quick Offsets */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-1.5 text-xs text-slate-300">
+                          <Calendar className="w-3.5 h-3.5 text-amber-300" />
+                          <span>{isEn ? "Target date:" : "Fecha a estimar:"}</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={targetDateInput}
+                          onChange={(e) => setTargetDateInput(e.target.value)}
+                          className="rounded-xl bg-black/60 border border-white/15 px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                        />
+                        {[
+                          { days: 30, label: "+30 d" },
+                          { days: 180, label: isEn ? "+6 mo" : "+6 m" },
+                          { days: 365, label: isEn ? "+1 yr" : "+1 año" },
+                        ].map((preset) => {
+                          const lastDate =
+                            trajectoryResult.points[trajectoryResult.points.length - 1].epochDate;
+                          return (
+                            <button
+                              key={preset.days}
+                              type="button"
+                              onClick={() =>
+                                setTargetDateInput(addDaysToDateString(lastDate, preset.days))
+                              }
+                              className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-amber-500/20 border border-white/10 text-[11px] font-mono text-slate-200 cursor-pointer"
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Extrapolated Coordinates Card */}
+                      {extrapolatedPosition && (
+                        <div className="rounded-xl bg-amber-500/10 border border-amber-400/35 p-3.5 flex flex-wrap items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="text-[11px] font-mono uppercase tracking-wider text-amber-300">
+                              {extrapolatedPosition.isExtrapolation
+                                ? isEn
+                                  ? `Extrapolated Position · ${extrapolatedPosition.targetDate}`
+                                  : `Posición Extrapolada · ${extrapolatedPosition.targetDate}`
+                                : isEn
+                                  ? `Interpolated Position · ${extrapolatedPosition.targetDate}`
+                                  : `Posición Interpolada · ${extrapolatedPosition.targetDate}`}
+                            </div>
+                            <div className="text-sm font-mono font-semibold text-white">
+                              RA {formatRAtoHMS(extrapolatedPosition.ra)} · Dec{" "}
+                              {formatDectoDMS(extrapolatedPosition.dec)}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-300">
+                              ± {extrapolatedPosition.uncertaintyArcsec.toFixed(2)}″ (1σ) ·{" "}
+                              {isEn ? "Δ from last:" : "Δ desde última:"}{" "}
+                              {extrapolatedPosition.displacementFromLastArcsec.toFixed(2)}″ (
+                              {extrapolatedPosition.deltaDaysFromLast >= 0 ? "+" : ""}
+                              {extrapolatedPosition.deltaDaysFromLast.toFixed(0)} d)
+                            </div>
+                          </div>
+
+                          {onShowTrajectoryOnMap && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onShowTrajectoryOnMap(trajectoryResult, extrapolatedPosition);
+                                onClose();
+                              }}
+                              className="btn-press px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 cursor-pointer hover:bg-amber-300"
+                            >
+                              <MapPin className="w-3.5 h-3.5" />
+                              <span>
+                                {isEn ? "Trace on Map 2" : "Trazar en Mapa 2"}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

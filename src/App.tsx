@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import {
-  ControlsPanel,
-  type MoleculeSignature,
-} from "./components/ControlsPanel";
+import { ControlsPanel } from "./components/ControlsPanel";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { ObservationsPanel } from "./components/ObservationsPanel";
 import {
@@ -20,7 +17,7 @@ import {
   parseRA,
 } from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
-import { SPHEREX_HIPS_WAVELENGTHS_UM } from "./lib/hips";
+import { NasaApiDownError } from "./lib/apiError";
 import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
 import { clearUrlState, parseUrlState, syncUrlState } from "./lib/urlState";
 import { useLanguage } from "./i18n/LanguageContext";
@@ -29,6 +26,7 @@ import type {
   CollectionQueryMode,
   CollectionVersionData,
   ColormapName,
+  Map2TabSession,
   RenderedCutout,
   ResolvedCelestialObject,
   SpherexCollectionId,
@@ -48,6 +46,7 @@ type StatusState =
   | { type: "queryingSia"; ra: string; dec: string; collection: string }
   | { type: "queryingAllVersions"; ra: string; dec: string }
   | { type: "noImagesFound"; collection: string; ra: string; dec: string }
+  | { type: "map2ApiDown" }
   | { type: "customError"; message: string }
   | null;
 
@@ -61,6 +60,76 @@ function translateErrorMessage(msg: string, t: Translations): string {
   return msg || t.status.unexpectedError;
 }
 
+function translateStatusState(
+  statusState: StatusState,
+  t: Translations
+): { text: string; isError: boolean } | null {
+  if (!statusState) return null;
+  switch (statusState.type) {
+    case "resolvingObject":
+      return { text: t.status.resolvingObject(statusState.name), isError: false };
+    case "objectNotFound":
+      return { text: t.status.objectNotFound(statusState.name), isError: true };
+    case "downloadingFits":
+      return {
+        text: t.status.downloadingFits({ band: statusState.band, id: statusState.id }),
+        isError: false,
+      };
+    case "invalidRa":
+      return { text: t.status.invalidRa, isError: true };
+    case "invalidDec":
+      return { text: t.status.invalidDec, isError: true };
+    case "queryingSia":
+      return { text: t.status.queryingSia(statusState), isError: false };
+    case "queryingAllVersions":
+      return { text: t.status.queryingAllVersions(statusState), isError: false };
+    case "noImagesFound":
+      return { text: t.status.noImagesFound(statusState), isError: true };
+    case "map2ApiDown":
+      return { text: t.status.map2ApiDown, isError: true };
+    case "customError":
+      return { text: translateErrorMessage(statusState.message, t), isError: true };
+  }
+}
+
+interface Map2TabInternal {
+  id: string;
+  label: string;
+  raInput: string;
+  decInput: string;
+  targetName: string;
+  resolvedObject: ResolvedCelestialObject | null;
+  lastCoords: { ra: number; dec: number; size: number } | null;
+  versions: Record<SpherexCollectionId, CollectionVersionData> | null;
+  activeCollection: SpherexCollectionId;
+  selectedIdx: number;
+  cutout: RenderedCutout | null;
+  loading: boolean;
+  cutoutLoading: boolean;
+  statusState: StatusState;
+}
+
+const INITIAL_MAP2_TAB: Map2TabInternal = {
+  id: "tab_initial",
+  label: "WISE 0855",
+  raInput: "08h55m10.831s",
+  decInput: "-7d14m42.53s",
+  targetName: "WISE 0855",
+  resolvedObject: null,
+  lastCoords: {
+    ra: 133.79513,
+    dec: -7.24515,
+    size: DEFAULT_CUTOUT_FOV_DEG,
+  },
+  versions: null,
+  activeCollection: "spherex_dr1",
+  selectedIdx: 0,
+  cutout: null,
+  loading: false,
+  cutoutLoading: false,
+  statusState: null,
+};
+
 export default function App() {
   const { t } = useLanguage();
 
@@ -73,8 +142,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [showExposuresModal, setShowExposuresModal] = useState<boolean>(false);
 
-  // Active molecular signatures & tuned HiPS spectral channel
-  const [activeMolecules, setActiveMolecules] = useState<Set<string>>(new Set());
+  // Tuned HiPS spectral channel
   const [externalChannelIdx, setExternalChannelIdx] = useState<number | null>(null);
 
   const cosmicBgRef = useRef<CosmicBackgroundHandle | null>(null);
@@ -83,7 +151,6 @@ export default function App() {
 
   const [raInput, setRaInput] = useState("08h55m10.831s");
   const [decInput, setDecInput] = useState("-7d14m42.53s");
-  const [targetName, setTargetName] = useState("WISE 0855");
   const [collectionMode, setCollectionMode] = useState<CollectionQueryMode>("spherex_dr1");
   const [band, setBand] = useState("all");
   const [radius, setRadius] = useState("0.05");
@@ -94,27 +161,22 @@ export default function App() {
   const [subtractZodi, setSubtractZodi] = useState(false);
   const [showCrosshair, setShowCrosshair] = useState(true);
 
-  const [loading, setLoading] = useState(false);
-  const [cutoutLoading, setCutoutLoading] = useState(false);
-  const cutoutRequestIdRef = useRef(0);
-  const cutoutAbortRef = useRef<AbortController | null>(null);
+  const [tabs, setTabs] = useState<Map2TabInternal[]>(() => [INITIAL_MAP2_TAB]);
+  const [activeTabId, setActiveTabId] = useState<string>(INITIAL_MAP2_TAB.id);
+  const tabCounterRef = useRef(0);
+  const secondMapOpenRef = useRef(secondMapOpen);
+  secondMapOpenRef.current = secondMapOpen;
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
+  const cutoutRequestsByTabRef = useRef<
+    Map<string, { reqId: number; controller: AbortController }>
+  >(new Map());
+  const lastCutoutSigByTabRef = useRef<Map<string, string>>(new Map());
+
   const [resolvingName, setResolvingName] = useState(false);
-  const [resolvedObject, setResolvedObject] = useState<ResolvedCelestialObject | null>(null);
   const [activePresetId, setActivePresetId] = useState<string | null>("wise_0855");
 
-  const [statusState, setStatusState] = useState<StatusState>(null);
-  const [versions, setVersions] = useState<Record<
-    SpherexCollectionId,
-    CollectionVersionData
-  > | null>(null);
-  const [activeCollection, setActiveCollection] = useState<SpherexCollectionId>("spherex_dr1");
-  const [selectedIdx, setSelectedIdx] = useState<number>(0);
-  const [cutout, setCutout] = useState<RenderedCutout | null>(null);
-  const [lastCoords, setLastCoords] = useState<{ ra: number; dec: number; size: number } | null>({
-    ra: 133.79513,
-    dec: -7.24515,
-    size: DEFAULT_CUTOUT_FOV_DEG,
-  });
   const [activeUrlCoords, setActiveUrlCoords] = useState<{ ra: string; dec: string } | null>(null);
   const [urlBootstrapDone, setUrlBootstrapDone] = useState(false);
   const urlInitializedRef = useRef(false);
@@ -123,40 +185,113 @@ export default function App() {
     value: string;
   } | null>(null);
 
-  const status = useMemo(() => {
-    if (!statusState) return null;
-    switch (statusState.type) {
-      case "resolvingObject":
-        return { text: t.status.resolvingObject(statusState.name), isError: false };
-      case "objectNotFound":
-        return { text: t.status.objectNotFound(statusState.name), isError: true };
-      case "downloadingFits":
-        return {
-          text: t.status.downloadingFits({ band: statusState.band, id: statusState.id }),
-          isError: false,
-        };
-      case "invalidRa":
-        return { text: t.status.invalidRa, isError: true };
-      case "invalidDec":
-        return { text: t.status.invalidDec, isError: true };
-      case "queryingSia":
-        return { text: t.status.queryingSia(statusState), isError: false };
-      case "queryingAllVersions":
-        return { text: t.status.queryingAllVersions(statusState), isError: false };
-      case "noImagesFound":
-        return { text: t.status.noImagesFound(statusState), isError: true };
-      case "customError":
-        return { text: translateErrorMessage(statusState.message, t), isError: true };
-    }
-  }, [statusState, t]);
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0],
+    [tabs, activeTabId]
+  );
+
+  const updateTab = useCallback(
+    (tabId: string, updater: (tab: Map2TabInternal) => Map2TabInternal) => {
+      setTabs((prev) => prev.map((tab) => (tab.id === tabId ? updater(tab) : tab)));
+    },
+    []
+  );
+
+  const map2Tabs: Map2TabSession[] = useMemo(
+    () =>
+      tabs.map((tab) => ({
+        id: tab.id,
+        label: tab.label,
+        raInput: tab.raInput,
+        decInput: tab.decInput,
+        targetName: tab.targetName,
+        resolvedObject: tab.resolvedObject,
+        lastCoords: tab.lastCoords,
+        versions: tab.versions,
+        activeCollection: tab.activeCollection,
+        selectedIdx: tab.selectedIdx,
+        cutout: tab.cutout,
+        loading: tab.loading,
+        cutoutLoading: tab.cutoutLoading,
+        status: translateStatusState(tab.statusState, t),
+      })),
+    [tabs, t]
+  );
+
+  const targetName = activeTab.targetName;
+  const resolvedObject = activeTab.resolvedObject;
+  const loading = activeTab.loading;
+  const cutoutLoading = activeTab.cutoutLoading;
+  const versions = activeTab.versions;
+  const activeCollection = activeTab.activeCollection;
+  const selectedIdx = activeTab.selectedIdx;
+  const cutout = activeTab.cutout;
+  const lastCoords = activeTab.lastCoords;
+  const status = useMemo(
+    () => translateStatusState(activeTab.statusState, t),
+    [activeTab.statusState, t]
+  );
 
   const activeVersionData = versions ? versions[activeCollection] : null;
   const observations = activeVersionData?.observations ?? [];
   const totalFound = activeVersionData?.total_found ?? 0;
   const siaUrl = activeVersionData?.sia_url ?? "";
 
-  const loadCutout = useCallback(
+  const openOrReuseMap2Tab = useCallback(
+    (params: {
+      label: string;
+      raInput: string;
+      decInput: string;
+      targetName: string;
+      resolvedObject: ResolvedCelestialObject | null;
+      forceReuse?: boolean;
+    }): string => {
+      if (!secondMapOpenRef.current || params.forceReuse) {
+        const currentId = activeTabIdRef.current;
+        lastCutoutSigByTabRef.current.delete(currentId);
+        updateTab(currentId, (tab) => ({
+          ...tab,
+          label: params.label,
+          raInput: params.raInput,
+          decInput: params.decInput,
+          targetName: params.targetName,
+          resolvedObject: params.resolvedObject,
+          versions: null,
+          cutout: null,
+          selectedIdx: 0,
+          statusState: null,
+        }));
+        setSecondMapOpen(true);
+        return currentId;
+      }
+
+      const newId = `tab_${Date.now()}_${++tabCounterRef.current}`;
+      const newTab: Map2TabInternal = {
+        id: newId,
+        label: params.label,
+        raInput: params.raInput,
+        decInput: params.decInput,
+        targetName: params.targetName,
+        resolvedObject: params.resolvedObject,
+        lastCoords: null,
+        versions: null,
+        activeCollection: "spherex_dr1",
+        selectedIdx: 0,
+        cutout: null,
+        loading: false,
+        cutoutLoading: false,
+        statusState: null,
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(newId);
+      return newId;
+    },
+    [updateTab]
+  );
+
+  const loadCutoutForTab = useCallback(
     async (
+      tabId: string,
       obs: SpherexObservation,
       raDeg: number,
       decDeg: number,
@@ -165,17 +300,21 @@ export default function App() {
       cmapVal: ColormapName,
       zodiVal: boolean
     ) => {
-      cutoutAbortRef.current?.abort();
+      const prevEntry = cutoutRequestsByTabRef.current.get(tabId);
+      prevEntry?.controller.abort();
       const controller = new AbortController();
-      cutoutAbortRef.current = controller;
+      const reqId = (prevEntry?.reqId ?? 0) + 1;
+      cutoutRequestsByTabRef.current.set(tabId, { reqId, controller });
 
-      const reqId = ++cutoutRequestIdRef.current;
-      setCutoutLoading(true);
-      setStatusState({
-        type: "downloadingFits",
-        band: obs.bandpass || "SPHEREx",
-        id: obs.obs_id,
-      });
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        cutoutLoading: true,
+        statusState: {
+          type: "downloadingFits",
+          band: obs.bandpass || "SPHEREx",
+          id: obs.obs_id,
+        },
+      }));
 
       try {
         const rendered = await getRenderedCutout({
@@ -189,31 +328,41 @@ export default function App() {
           priority: "high",
           signal: controller.signal,
         });
-        if (reqId !== cutoutRequestIdRef.current) return;
-        setCutout(rendered);
-        setStatusState(null);
+        if (cutoutRequestsByTabRef.current.get(tabId)?.reqId !== reqId) return;
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          cutout: rendered,
+          statusState: null,
+        }));
       } catch (err) {
         if (
-          reqId !== cutoutRequestIdRef.current ||
+          cutoutRequestsByTabRef.current.get(tabId)?.reqId !== reqId ||
           (err instanceof DOMException && err.name === "AbortError")
         ) {
           return;
         }
-        setStatusState({
-          type: "customError",
-          message: err instanceof Error ? err.message : "",
-        });
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          statusState:
+            err instanceof NasaApiDownError
+              ? { type: "map2ApiDown" }
+              : {
+                  type: "customError",
+                  message: err instanceof Error ? err.message : "",
+                },
+        }));
       } finally {
-        if (reqId === cutoutRequestIdRef.current) {
-          setCutoutLoading(false);
+        if (cutoutRequestsByTabRef.current.get(tabId)?.reqId === reqId) {
+          updateTab(tabId, (tab) => ({ ...tab, cutoutLoading: false }));
         }
       }
     },
-    []
+    [updateTab]
   );
 
-  const executeSearch = useCallback(
+  const executeSearchForTab = useCallback(
     async (
+      tabId: string,
       rawRa: string,
       rawDec: string,
       colMode: CollectionQueryMode,
@@ -227,22 +376,25 @@ export default function App() {
       const sizeNum = Number(sizeStr);
 
       if (raDeg === null) {
-        setStatusState({ type: "invalidRa" });
+        updateTab(tabId, (tab) => ({ ...tab, statusState: { type: "invalidRa" } }));
         return;
       }
       if (decDeg === null) {
-        setStatusState({ type: "invalidDec" });
+        updateTab(tabId, (tab) => ({ ...tab, statusState: { type: "invalidDec" } }));
         return;
       }
 
       setActiveUrlCoords({ ra: rawRa.trim(), dec: rawDec.trim() });
-      setLoading(true);
-      setStatusState({
-        type: "queryingSia",
-        ra: raDeg.toFixed(5),
-        dec: decDeg.toFixed(5),
-        collection: colMode,
-      });
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        loading: true,
+        statusState: {
+          type: "queryingSia",
+          ra: raDeg.toFixed(5),
+          dec: decDeg.toFixed(5),
+          collection: colMode,
+        },
+      }));
 
       try {
         const multiData = await queryAllSpherexVersions({
@@ -253,54 +405,93 @@ export default function App() {
           band: bandVal,
         });
 
-        setVersions(multiData.versions);
         const targetCol = multiData.recommendedCollection;
-        setActiveCollection(targetCol);
-        setSelectedIdx(0);
-        setLastCoords({ ra: raDeg, dec: decDeg, size: sizeNum });
-
         const targetObsList = multiData.versions[targetCol].observations;
 
-        if (targetObsList.length === 0) {
-          setCutout(null);
-          setStatusState({
-            type: "noImagesFound",
-            collection: "SPHEREx DR1 Wide (spherex_dr1)",
-            ra: raDeg.toFixed(4),
-            dec: decDeg.toFixed(4),
-          });
-          return;
-        }
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          versions: multiData.versions,
+          activeCollection: targetCol,
+          selectedIdx: 0,
+          lastCoords: { ra: raDeg, dec: decDeg, size: sizeNum },
+          ...(targetObsList.length === 0
+            ? {
+                cutout: null,
+                statusState: {
+                  type: "noImagesFound",
+                  collection: "SPHEREx DR1 Wide (spherex_dr1)",
+                  ra: raDeg.toFixed(4),
+                  dec: decDeg.toFixed(4),
+                },
+              }
+            : {}),
+        }));
       } catch (err) {
-        setStatusState({
-          type: "customError",
-          message: err instanceof Error ? err.message : "",
-        });
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          statusState:
+            err instanceof NasaApiDownError
+              ? { type: "map2ApiDown" }
+              : {
+                  type: "customError",
+                  message: err instanceof Error ? err.message : "",
+                },
+        }));
       } finally {
-        setLoading(false);
+        updateTab(tabId, (tab) => ({ ...tab, loading: false }));
       }
     },
-    []
+    [updateTab]
+  );
+
+  const executeSearch = useCallback(
+    async (
+      rawRa: string,
+      rawDec: string,
+      colMode: CollectionQueryMode,
+      bandVal: string,
+      radiusStr: string,
+      sizeStr: string
+    ) => {
+      await executeSearchForTab(
+        activeTabIdRef.current,
+        rawRa,
+        rawDec,
+        colMode,
+        bandVal,
+        radiusStr,
+        sizeStr
+      );
+    },
+    [executeSearchForTab]
   );
 
   const targetRa = lastCoords?.ra;
   const targetDec = lastCoords?.dec;
 
-  // Instant update of flux stretch, colormap, or zodi subtraction on loaded FITS
-  // Always load the full MAX_CUTOUT_FOV_DEG image so reducing FOV stays within the same image
+  // Instant update of flux stretch, colormap, or zodi subtraction on loaded FITS across all open tabs
   useEffect(() => {
-    const obs = observations[selectedIdx];
-    if (!obs || targetRa === undefined || targetDec === undefined) return;
-    void loadCutout(
-      obs,
-      targetRa,
-      targetDec,
-      MAX_CUTOUT_FOV_DEG,
-      stretch,
-      colormap,
-      subtractZodi
-    );
-  }, [stretch, colormap, subtractZodi, selectedIdx, observations, targetRa, targetDec, loadCutout]);
+    for (const tab of tabs) {
+      const tabObsList = tab.versions?.[tab.activeCollection]?.observations ?? [];
+      const obs = tabObsList[tab.selectedIdx];
+      const raDeg = tab.lastCoords?.ra;
+      const decDeg = tab.lastCoords?.dec;
+      if (!obs || raDeg === undefined || decDeg === undefined) continue;
+      const sig = `${obs.access_url}|${obs.obs_id}|${raDeg}|${decDeg}|${stretch}|${colormap}|${subtractZodi}`;
+      if (lastCutoutSigByTabRef.current.get(tab.id) === sig) continue;
+      lastCutoutSigByTabRef.current.set(tab.id, sig);
+      void loadCutoutForTab(
+        tab.id,
+        obs,
+        raDeg,
+        decDeg,
+        MAX_CUTOUT_FOV_DEG,
+        stretch,
+        colormap,
+        subtractZodi
+      );
+    }
+  }, [tabs, stretch, colormap, subtractZodi, loadCutoutForTab]);
 
   // Background prefetch next observation
   useEffect(() => {
@@ -358,14 +549,20 @@ export default function App() {
       setRaInput(parsed.ra);
       setDecInput(parsed.dec);
       setActivePresetId(null);
-      setResolvedObject(null);
-      setTargetName(t.chrono.customSkyPatch);
       setActiveUrlCoords({ ra: parsed.ra, dec: parsed.dec });
       setCurrentScreen("explorer");
-      setSecondMapOpen(true);
+      const tabId = openOrReuseMap2Tab({
+        label: `${parsed.ra}, ${parsed.dec}`,
+        raInput: parsed.ra,
+        decInput: parsed.dec,
+        targetName: t.chrono.customSkyPatch,
+        resolvedObject: null,
+        forceReuse: true,
+      });
       setUrlBootstrapDone(true);
 
-      void executeSearch(
+      void executeSearchForTab(
+        tabId,
         parsed.ra,
         parsed.dec,
         effectiveCol,
@@ -398,7 +595,6 @@ export default function App() {
       if (matchingPreset) {
         const effectiveCol = parsed.options.collection ?? matchingPreset.collection;
         setActivePresetId(matchingPreset.id);
-        setTargetName(matchingPreset.label);
         setRaInput(matchingPreset.ra);
         setDecInput(matchingPreset.dec);
         setCollectionMode(effectiveCol);
@@ -415,18 +611,26 @@ export default function App() {
           subtractZodi: effectiveZodi,
         });
 
+        let resolvedObj: ResolvedCelestialObject | null = null;
         try {
-          const resolved = await resolveCelestialName(matchingPreset.queryName);
-          setResolvedObject(resolved);
+          resolvedObj = await resolveCelestialName(matchingPreset.queryName);
         } catch {
-          setResolvedObject(null);
+          resolvedObj = null;
         }
 
         setLoadingProgress(100);
         setCurrentScreen("explorer");
-        setSecondMapOpen(true);
+        const tabId = openOrReuseMap2Tab({
+          label: matchingPreset.label,
+          raInput: matchingPreset.ra,
+          decInput: matchingPreset.dec,
+          targetName: matchingPreset.label,
+          resolvedObject: resolvedObj,
+          forceReuse: true,
+        });
         setUrlBootstrapDone(true);
-        await executeSearch(
+        await executeSearchForTab(
+          tabId,
           matchingPreset.ra,
           matchingPreset.dec,
           effectiveCol,
@@ -441,8 +645,6 @@ export default function App() {
         const resolved = await resolveCelestialName(parsed.target);
         const effectiveCol = parsed.options.collection ?? "spherex_dr1";
         setActivePresetId(null);
-        setResolvedObject(resolved);
-        setTargetName(resolved.canonicalName);
         setRaInput(resolved.raHms);
         setDecInput(resolved.decDms);
         setCollectionMode(effectiveCol);
@@ -461,9 +663,17 @@ export default function App() {
 
         setLoadingProgress(100);
         setCurrentScreen("explorer");
-        setSecondMapOpen(true);
+        const tabId = openOrReuseMap2Tab({
+          label: resolved.canonicalName,
+          raInput: resolved.raHms,
+          decInput: resolved.decDms,
+          targetName: resolved.canonicalName,
+          resolvedObject: resolved,
+          forceReuse: true,
+        });
         setUrlBootstrapDone(true);
-        await executeSearch(
+        await executeSearchForTab(
+          tabId,
           resolved.raHms,
           resolved.decDms,
           effectiveCol,
@@ -578,17 +788,22 @@ export default function App() {
     }) => {
       setWarping(true);
       const nextCollection = params.preset?.collection ?? collectionMode;
+      const nextTargetName =
+        params.targetLabel ?? params.preset?.label ?? t.chrono.customSkyPatch;
       setRaInput(params.ra);
       setDecInput(params.dec);
       setActivePresetId(params.preset?.id ?? null);
-      setResolvedObject(params.resolved ?? null);
-      setTargetName(
-        params.targetLabel ?? params.preset?.label ?? t.chrono.customSkyPatch
-      );
       if (params.preset?.collection) {
         setCollectionMode(params.preset.collection);
       }
-      setSecondMapOpen(true);
+      const tabId = openOrReuseMap2Tab({
+        label: nextTargetName,
+        raInput: params.ra,
+        decInput: params.dec,
+        targetName: nextTargetName,
+        resolvedObject: params.resolved ?? null,
+        forceReuse: true,
+      });
 
       const warpPromise =
         cosmicBgRef.current?.warpTo({ ra: params.raDeg, dec: params.decDeg }, 1200) ??
@@ -597,7 +812,8 @@ export default function App() {
       setCurrentScreen("loading");
       setLoadingProgress(25);
 
-      const searchPromise = executeSearch(
+      const searchPromise = executeSearchForTab(
+        tabId,
         params.ra,
         params.dec,
         nextCollection,
@@ -632,50 +848,68 @@ export default function App() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setActivePresetId(null);
-    setTargetName(t.chrono.customSkyPatch);
-    setSecondMapOpen(true);
-    void executeSearch(raInput, decInput, collectionMode, band, radius, size);
+    const tabId = openOrReuseMap2Tab({
+      label: `${raInput}, ${decInput}`,
+      raInput,
+      decInput,
+      targetName: t.chrono.customSkyPatch,
+      resolvedObject: null,
+    });
+    void executeSearchForTab(tabId, raInput, decInput, collectionMode, band, radius, size);
   };
 
   const handleSubmitCoords = useCallback(
     (raStr: string, decStr: string) => {
       setActivePresetId(null);
-      setResolvedObject(null);
-      setTargetName(t.chrono.customSkyPatch);
-      setSecondMapOpen(true);
-      void executeSearch(raStr, decStr, collectionMode, band, radius, size);
+      const tabId = openOrReuseMap2Tab({
+        label: `${raStr}, ${decStr}`,
+        raInput: raStr,
+        decInput: decStr,
+        targetName: t.chrono.customSkyPatch,
+        resolvedObject: null,
+      });
+      void executeSearchForTab(tabId, raStr, decStr, collectionMode, band, radius, size);
     },
-    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
+    [band, collectionMode, executeSearchForTab, openOrReuseMap2Tab, radius, size, t.chrono.customSkyPatch]
   );
 
   const handleSelectPreset = useCallback(
     async (preset: TargetPreset) => {
       setActivePresetId(preset.id);
-      setTargetName(preset.label);
       setRaInput(preset.ra);
       setDecInput(preset.dec);
       setCollectionMode(preset.collection);
-      setSecondMapOpen(true);
+      const tabId = openOrReuseMap2Tab({
+        label: preset.label,
+        raInput: preset.ra,
+        decInput: preset.dec,
+        targetName: preset.label,
+        resolvedObject: null,
+      });
 
       setResolvingName(true);
       try {
         const resolved = await resolveCelestialName(preset.queryName);
-        setResolvedObject(resolved);
+        updateTab(tabId, (tab) => ({ ...tab, resolvedObject: resolved }));
       } catch {
-        setResolvedObject(null);
+        updateTab(tabId, (tab) => ({ ...tab, resolvedObject: null }));
       } finally {
         setResolvingName(false);
       }
 
-      await executeSearch(preset.ra, preset.dec, preset.collection, band, radius, size);
+      await executeSearchForTab(tabId, preset.ra, preset.dec, preset.collection, band, radius, size);
     },
-    [band, executeSearch, radius, size]
+    [band, executeSearchForTab, openOrReuseMap2Tab, radius, size, updateTab]
   );
 
   const handleSearchCelestialName = useCallback(
     async (name: string) => {
       setResolvingName(true);
-      setStatusState({ type: "resolvingObject", name });
+      const targetTabId = activeTabIdRef.current;
+      updateTab(targetTabId, (tab) => ({
+        ...tab,
+        statusState: { type: "resolvingObject", name },
+      }));
 
       const matchingPreset = t.presets.find(
         (p) =>
@@ -685,20 +919,26 @@ export default function App() {
       setActivePresetId(matchingPreset?.id ?? null);
 
       if (matchingPreset) {
-        setTargetName(matchingPreset.label);
         setRaInput(matchingPreset.ra);
         setDecInput(matchingPreset.dec);
         setCollectionMode(matchingPreset.collection);
-        setSecondMapOpen(true);
+        const tabId = openOrReuseMap2Tab({
+          label: matchingPreset.label,
+          raInput: matchingPreset.ra,
+          decInput: matchingPreset.dec,
+          targetName: matchingPreset.label,
+          resolvedObject: null,
+        });
         try {
           const resolved = await resolveCelestialName(matchingPreset.queryName);
-          setResolvedObject(resolved);
+          updateTab(tabId, (tab) => ({ ...tab, resolvedObject: resolved }));
         } catch {
-          setResolvedObject(null);
+          updateTab(tabId, (tab) => ({ ...tab, resolvedObject: null }));
         } finally {
           setResolvingName(false);
         }
-        await executeSearch(
+        await executeSearchForTab(
+          tabId,
           matchingPreset.ra,
           matchingPreset.dec,
           matchingPreset.collection,
@@ -711,93 +951,147 @@ export default function App() {
 
       try {
         const resolved = await resolveCelestialName(name);
-        setResolvedObject(resolved);
-        setTargetName(resolved.canonicalName);
         setRaInput(resolved.raHms);
         setDecInput(resolved.decDms);
         setCollectionMode("spherex_dr1");
-        setSecondMapOpen(true);
-        await executeSearch(resolved.raHms, resolved.decDms, "spherex_dr1", band, radius, size);
+        const tabId = openOrReuseMap2Tab({
+          label: resolved.canonicalName,
+          raInput: resolved.raHms,
+          decInput: resolved.decDms,
+          targetName: resolved.canonicalName,
+          resolvedObject: resolved,
+        });
+        await executeSearchForTab(
+          tabId,
+          resolved.raHms,
+          resolved.decDms,
+          "spherex_dr1",
+          band,
+          radius,
+          size
+        );
       } catch {
-        setStatusState({ type: "objectNotFound", name });
+        updateTab(targetTabId, (tab) => ({
+          ...tab,
+          statusState: { type: "objectNotFound", name },
+        }));
       } finally {
         setResolvingName(false);
       }
     },
-    [band, executeSearch, radius, size, t.presets]
-  );
-
-  const handleToggleMolecule = useCallback(
-    (mol: MoleculeSignature) => {
-      setActiveMolecules((prev) => {
-        const next = new Set(prev);
-        if (next.has(mol.id)) {
-          next.delete(mol.id);
-        } else {
-          next.add(mol.id);
-          // Tune HiPS channel to closest wavelength for this molecule
-          let bestIdx = 0;
-          let bestDiff = Infinity;
-          SPHEREX_HIPS_WAVELENGTHS_UM.forEach((w, idx) => {
-            const diff = Math.abs(w - mol.wavelengthUm);
-            if (diff < bestDiff) {
-              bestDiff = diff;
-              bestIdx = idx;
-            }
-          });
-          setExternalChannelIdx(bestIdx);
-
-          // If observations include the molecule's detector band, select it
-          const matchingObsIdx = observations.findIndex((o) => o.bandpass === mol.band);
-          if (matchingObsIdx >= 0) {
-            setSelectedIdx(matchingObsIdx);
-          }
-        }
-        return next;
-      });
-    },
-    [observations]
+    [band, executeSearchForTab, openOrReuseMap2Tab, radius, size, t.presets, updateTab]
   );
 
   const handleSelectCollection = (col: SpherexCollectionId) => {
-    setActiveCollection(col);
-    setSelectedIdx(0);
+    updateTab(activeTabIdRef.current, (tab) => ({
+      ...tab,
+      activeCollection: col,
+      selectedIdx: 0,
+    }));
   };
 
   const handleSelectVersionObservation = useCallback(
-    (col: SpherexCollectionId, targetObs: SpherexObservation) => {
-      setActiveCollection(col);
-      const colObs = versions?.[col]?.observations ?? [];
-      const foundIdx = colObs.findIndex(
-        (o) =>
-          (o.access_url && targetObs.access_url && o.access_url === targetObs.access_url) ||
-          (o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass)
-      );
-      setSelectedIdx(foundIdx >= 0 ? foundIdx : 0);
+    (tabId: string, col: SpherexCollectionId, targetObs: SpherexObservation) => {
+      updateTab(tabId, (tab) => {
+        const colObs = tab.versions?.[col]?.observations ?? [];
+        const foundIdx = colObs.findIndex(
+          (o) =>
+            (o.access_url && targetObs.access_url && o.access_url === targetObs.access_url) ||
+            (o.obs_id === targetObs.obs_id && o.bandpass === targetObs.bandpass)
+        );
+        return {
+          ...tab,
+          activeCollection: col,
+          selectedIdx: foundIdx >= 0 ? foundIdx : 0,
+        };
+      });
     },
-    [versions]
+    [updateTab]
   );
 
-  const handleChangeFov = useCallback((newSize: number) => {
-    const clamped = clampCutoutFov(newSize);
-    setSize(String(clamped));
-    setLastCoords((prev) => (prev ? { ...prev, size: clamped } : prev));
-  }, []);
+  const handleChangeFov = useCallback(
+    (newSize: number) => {
+      const clamped = clampCutoutFov(newSize);
+      setSize(String(clamped));
+      updateTab(activeTabIdRef.current, (tab) => ({
+        ...tab,
+        lastCoords: tab.lastCoords ? { ...tab.lastCoords, size: clamped } : tab.lastCoords,
+      }));
+    },
+    [updateTab]
+  );
 
   const handleQueryAtCoords = useCallback(
     (raDeg: number, decDeg: number) => {
       const raStr = raDeg.toFixed(5);
       const decStr = decDeg.toFixed(5);
       setActivePresetId(null);
-      setResolvedObject(null);
-      setTargetName(t.chrono.customSkyPatch);
       setRaInput(raStr);
       setDecInput(decStr);
-      setSecondMapOpen(true);
-      void executeSearch(raStr, decStr, collectionMode, band, radius, size);
+      const tabId = openOrReuseMap2Tab({
+        label: `${raDeg.toFixed(2)}°, ${decDeg.toFixed(2)}°`,
+        raInput: raStr,
+        decInput: decStr,
+        targetName: t.chrono.customSkyPatch,
+        resolvedObject: null,
+      });
+      void executeSearchForTab(tabId, raStr, decStr, collectionMode, band, radius, size);
     },
-    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
+    [band, collectionMode, executeSearchForTab, openOrReuseMap2Tab, radius, size, t.chrono.customSkyPatch]
   );
+
+  const handleSelectMap2Tab = useCallback(
+    (tabId: string) => {
+      setActiveTabId(tabId);
+      const found = tabs.find((tab) => tab.id === tabId);
+      if (found) {
+        setRaInput(found.raInput);
+        setDecInput(found.decInput);
+      }
+    },
+    [tabs]
+  );
+
+  const handleCloseMap2Tab = useCallback((tabId: string) => {
+    const req = cutoutRequestsByTabRef.current.get(tabId);
+    req?.controller.abort();
+    cutoutRequestsByTabRef.current.delete(tabId);
+    lastCutoutSigByTabRef.current.delete(tabId);
+
+    setTabs((prev) => {
+      if (prev.length <= 1) {
+        setSecondMapOpen(false);
+        return prev;
+      }
+      const idx = prev.findIndex((tItem) => tItem.id === tabId);
+      const next = prev.filter((tItem) => tItem.id !== tabId);
+      if (tabId === activeTabIdRef.current && next.length > 0) {
+        const nextActive = next[Math.min(idx, next.length - 1)];
+        setActiveTabId(nextActive.id);
+        setRaInput(nextActive.raInput);
+        setDecInput(nextActive.decInput);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleSecondMap = useCallback((open: boolean) => {
+    setSecondMapOpen(open);
+    if (!open) {
+      // User manually closed Map 2: keep only the active tab so next search starts clean
+      setTabs((prev) => {
+        const current = prev.find((tItem) => tItem.id === activeTabIdRef.current) ?? prev[0];
+        for (const tItem of prev) {
+          if (tItem.id !== current.id) {
+            cutoutRequestsByTabRef.current.get(tItem.id)?.controller.abort();
+            cutoutRequestsByTabRef.current.delete(tItem.id);
+            lastCutoutSigByTabRef.current.delete(tItem.id);
+          }
+        }
+        return [current];
+      });
+    }
+  }, []);
 
   const selectedObs = observations[selectedIdx] ?? null;
 
@@ -975,8 +1269,6 @@ export default function App() {
               resolvedObject={resolvedObject}
               activePresetId={activePresetId}
               totalFound={totalFound}
-              activeMolecules={activeMolecules}
-              onToggleMolecule={handleToggleMolecule}
               onClose={() => setSidebarOpen(false)}
               onChangeFov={handleChangeFov}
               onSubmitCoords={handleSubmitCoords}
@@ -989,6 +1281,10 @@ export default function App() {
         </div>
 
         <ViewerPanel
+          map2Tabs={map2Tabs}
+          activeMap2TabId={activeTab.id}
+          onSelectMap2Tab={handleSelectMap2Tab}
+          onCloseMap2Tab={handleCloseMap2Tab}
           selectedObs={selectedObs}
           cutout={cutout}
           cutoutLoading={cutoutLoading}
@@ -1004,7 +1300,7 @@ export default function App() {
           colormap={colormap}
           subtractZodi={subtractZodi}
           secondMapOpen={secondMapOpen}
-          onToggleSecondMap={setSecondMapOpen}
+          onToggleSecondMap={handleToggleSecondMap}
           externalChannelIdx={externalChannelIdx}
           onChangeFov={handleChangeFov}
           onSelectVersionObservation={handleSelectVersionObservation}
@@ -1029,7 +1325,7 @@ export default function App() {
               totalFound={totalFound}
               selectedIdx={selectedIdx}
               onSelect={(idx) => {
-                setSelectedIdx(idx);
+                updateTab(activeTab.id, (tab) => ({ ...tab, selectedIdx: idx }));
                 setSecondMapOpen(true);
                 setShowExposuresModal(false);
               }}

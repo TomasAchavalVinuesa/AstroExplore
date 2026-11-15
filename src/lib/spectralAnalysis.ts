@@ -1,4 +1,4 @@
-import { worldToPixel } from "./coordinates";
+import { pixelToWorld, worldToPixel } from "./coordinates";
 import { parseDetectorId } from "./detectors";
 import { SPHEREX_HIPS_WAVELENGTHS_UM } from "./hips";
 import type {
@@ -739,4 +739,79 @@ export function compareRoiReadings(
     sharedDetectedFormulas,
     insufficientOverlap,
   };
+}
+
+/**
+ * Calcula el fotocentro (centroide ponderado por flujo por encima de la mediana de fondo)
+ * dentro de la región ROI en el recorte FITS dado y lo proyecta a coordenadas ICRS (RA, Dec).
+ */
+export function computeRoiPhotocenter(
+  roi: SkyRoiSelection,
+  cutout: RenderedCutout
+): { ra: number; dec: number } | null {
+  if (!cutout.fluxData || !cutout.wcs) return null;
+
+  const polyPix: Array<{ x: number; y: number }> = [];
+  for (const c of roi.corners) {
+    const p = worldToPixel(c.ra, c.dec, cutout.wcs);
+    if (p) polyPix.push({ x: p.px, y: p.py });
+  }
+  if (polyPix.length < 3) return null;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const p of polyPix) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  const colStart = Math.max(0, Math.floor(minX - 1));
+  const colEnd = Math.min(cutout.width - 1, Math.ceil(maxX - 1));
+  const rowStart = Math.max(0, Math.floor(minY - 1));
+  const rowEnd = Math.min(cutout.height - 1, Math.ceil(maxY - 1));
+
+  const samples: Array<{ px: number; py: number; flux: number }> = [];
+  for (let row = rowStart; row <= rowEnd; row++) {
+    for (let col = colStart; col <= colEnd; col++) {
+      const px = col + 1;
+      const py = row + 1;
+      if (!pointInPolygon(px, py, polyPix)) continue;
+      const idx = row * cutout.width + col;
+      const f = cutout.fluxData[idx];
+      if (!Number.isFinite(f)) continue;
+      samples.push({ px, py, flux: f });
+    }
+  }
+
+  if (samples.length < 2) return null;
+
+  const sortedFlux = samples.map((s) => s.flux).sort((a, b) => a - b);
+  const mid = Math.floor(sortedFlux.length / 2);
+  const bgMedian =
+    sortedFlux.length % 2 === 1
+      ? sortedFlux[mid]
+      : (sortedFlux[mid - 1] + sortedFlux[mid]) / 2;
+
+  let sumW = 0;
+  let sumX = 0;
+  let sumY = 0;
+  for (const s of samples) {
+    const w = Math.max(0, s.flux - bgMedian);
+    if (w <= 0) continue;
+    sumW += w;
+    sumX += w * s.px;
+    sumY += w * s.py;
+  }
+
+  if (sumW <= 0) return null;
+
+  const meanPx = sumX / sumW;
+  const meanPy = sumY / sumW;
+  const sky = pixelToWorld(meanPx, meanPy, cutout.wcs);
+  if (!Number.isFinite(sky.ra) || !Number.isFinite(sky.dec)) return null;
+  return sky;
 }

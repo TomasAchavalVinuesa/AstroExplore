@@ -1,7 +1,7 @@
 import type { SavedRoiReading } from "./types";
 
 const STORAGE_KEY = "spherex_saved_roi_readings_v1";
-const MAX_SAVED_READINGS = 20;
+const MAX_SAVED_READINGS = 100;
 
 export function loadSavedRoiReadings(): SavedRoiReading[] {
   if (typeof window === "undefined" || !window.localStorage) return [];

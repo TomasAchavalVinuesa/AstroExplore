@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Columns2,
   Compass,
   Crosshair,
   Globe,
   Grid,
   MapPin,
+  Maximize2,
+  Minimize2,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -22,10 +25,14 @@ import {
   healpixFaceXYToRaDec,
   nest2xyInFace,
   parseSRegionPolygon,
+  retryHipsApiHealth,
   SPHEREX_HIPS_WAVELENGTHS_UM,
+  subscribeHipsApiStatus,
 } from "../lib/hips";
 import type {
+  CelestialTrajectoryResult,
   ColormapName,
+  ExtrapolatedPosition,
   RenderedCutout,
   SpherexObservation,
   StretchMode,
@@ -46,6 +53,10 @@ interface HipsSkyMapPanelProps {
   externalChannelIdx?: number | null;
   secondMapZoom?: number;
   secondMapViewCorners?: { ra: number; dec: number }[] | null;
+  activeTrajectory?: {
+    trajectory: CelestialTrajectoryResult;
+    extrapolated: ExtrapolatedPosition | null;
+  } | null;
   onChangeFov?: (newSize: number) => void;
   onSelectObservation?: (obs: SpherexObservation) => void;
   onQueryAtCoords?: (raDeg: number, decDeg: number) => void;
@@ -351,6 +362,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
   externalChannelIdx,
   secondMapZoom = 1,
   secondMapViewCorners = null,
+  activeTrajectory = null,
   onQueryAtCoords,
 }) => {
   const { t } = useLanguage();
@@ -372,6 +384,34 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
 
   const [showFootprints, setShowFootprints] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [hipsApiDown, setHipsApiDown] = useState<boolean>(false);
+
+  useEffect(() => {
+    return subscribeHipsApiStatus(setHipsApiDown);
+  }, []);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(document.fullscreenElement === mapViewportRef.current);
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    return () => document.removeEventListener("fullscreenchange", handleFsChange);
+  }, []);
+
+  const handleToggleFullscreen = async () => {
+    const el = mapViewportRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      // Ignore if fullscreen is blocked by browser
+    }
+  };
 
   const [cursorCoords, setCursorCoords] = useState<{ ra: number; dec: number } | null>(null);
   const [renderTick, setRenderTick] = useState<number>(0);
@@ -878,6 +918,121 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
       }
     }
 
+    // 6b. Trayectoria observada y ubicación predicha (extrapolación)
+    if (activeTrajectory) {
+      const obsProjected = activeTrajectory.trajectory.points
+        .map((pt, idx) => ({
+          idx,
+          pt,
+          proj: projectSky(pt.ra, pt.dec),
+        }))
+        .filter((item) => isAitoff || item.proj.cosC > 0.05);
+
+      ctx.save();
+      if (obsProjected.length >= 2) {
+        ctx.strokeStyle = "#00D2FF";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(obsProjected[0].proj.x, obsProjected[0].proj.y);
+        for (let i = 1; i < obsProjected.length; i++) {
+          ctx.lineTo(obsProjected[i].proj.x, obsProjected[i].proj.y);
+        }
+        ctx.stroke();
+      }
+
+      for (const item of obsProjected) {
+        ctx.fillStyle = "#00D2FF";
+        ctx.beginPath();
+        ctx.arc(item.proj.x, item.proj.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      if (activeTrajectory.extrapolated) {
+        const ext = activeTrajectory.extrapolated;
+        const extProj = projectSky(ext.ra, ext.dec);
+        if (isAitoff || extProj.cosC > 0.05) {
+          const lastObs = obsProjected[obsProjected.length - 1];
+          if (lastObs) {
+            ctx.save();
+            ctx.strokeStyle = "#fbbf24";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(lastObs.proj.x, lastObs.proj.y);
+            ctx.lineTo(extProj.x, extProj.y);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Uncertainty halo & radius
+          const uncertaintyRad = (ext.uncertaintyArcsec / 3600) * DEG2RAD;
+          const sigmaPx = isAitoff
+            ? 12
+            : Math.max(10, Math.min(80, uncertaintyRad * scalePxPerRad));
+
+          const glow = ctx.createRadialGradient(
+            extProj.x,
+            extProj.y,
+            2,
+            extProj.x,
+            extProj.y,
+            sigmaPx + 10
+          );
+          glow.addColorStop(0, "rgba(251, 191, 36, 0.7)");
+          glow.addColorStop(0.5, "rgba(251, 191, 36, 0.2)");
+          glow.addColorStop(1, "transparent");
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(extProj.x, extProj.y, sigmaPx + 10, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.save();
+          ctx.strokeStyle = "rgba(251, 191, 36, 0.85)";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.arc(extProj.x, extProj.y, sigmaPx, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+
+          // Predicted location center marker
+          ctx.fillStyle = "#fbbf24";
+          ctx.beginPath();
+          ctx.arc(extProj.x, extProj.y, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Label next to predicted location
+          const label = `${ext.targetDate} (±${ext.uncertaintyArcsec.toFixed(1)}″)`;
+          ctx.font = "600 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+          const textW = ctx.measureText(label).width;
+          const padX = 6;
+          const boxW = textW + padX * 2;
+          const boxH = 18;
+          const boxX = Math.min(width - boxW - 6, Math.max(6, extProj.x + 10));
+          const boxY = Math.min(height - boxH - 6, Math.max(6, extProj.y - boxH / 2));
+
+          ctx.fillStyle = "rgba(7, 11, 25, 0.88)";
+          ctx.strokeStyle = "rgba(251, 191, 36, 0.7)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(boxX, boxY, boxW, boxH, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = "#fde68a";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, boxX + padX, boxY + boxH / 2);
+        }
+      }
+      ctx.restore();
+    }
+
     // 7. Cerrar clip elíptico y dibujar borde de la proyección Aitoff All-Sky
     if (isAitoff) {
       ctx.restore();
@@ -903,6 +1058,7 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
     secondMapOpen,
     secondMapZoom,
     secondMapViewCorners,
+    activeTrajectory,
     renderTick,
     triggerRepaint,
   ]);
@@ -1051,9 +1207,9 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
   return (
     <div
       ref={mapViewportRef}
-      className={`relative w-full h-full rounded-[22px] overflow-hidden border border-white/15 bg-black shadow-2xl select-none overscroll-none ${
-        secondMapOpen ? "min-h-0" : "min-h-[280px]"
-      }`}
+      className={`relative w-full h-full overflow-hidden border border-white/15 bg-black shadow-2xl select-none overscroll-none ${
+        isFullscreen ? "rounded-none" : "rounded-[22px]"
+      } ${secondMapOpen ? "min-h-0" : "min-h-[280px]"}`}
     >
       <canvas
         ref={canvasRef}
@@ -1080,17 +1236,33 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
               </span>
             </div>
 
-            {onToggleSecondMap && (
+            <div className="flex items-center gap-1.5 pointer-events-auto shrink-0">
               <button
                 type="button"
-                onClick={() => onToggleSecondMap(false)}
-                className="btn-press glass-panel rounded-full p-1.5 text-xs font-medium border-[#00D2FF]/70 text-[#00D2FF] bg-[#00D2FF]/15 hover:text-white cursor-pointer transition-colors pointer-events-auto shrink-0"
-                title={t.chrono.closeSecondMapButton}
-                aria-label={t.chrono.closeSecondMapButton}
+                onClick={handleToggleFullscreen}
+                className="btn-press glass-panel rounded-full p-1.5 text-slate-300 hover:text-white cursor-pointer transition-colors"
+                title={isFullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
+                aria-label={isFullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
               >
-                <X className="w-3.5 h-3.5" />
+                {isFullscreen ? (
+                  <Minimize2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5" />
+                )}
               </button>
-            )}
+
+              {onToggleSecondMap && (
+                <button
+                  type="button"
+                  onClick={() => onToggleSecondMap(false)}
+                  className="btn-press glass-panel rounded-full p-1.5 text-xs font-medium border-[#00D2FF]/70 text-[#00D2FF] bg-[#00D2FF]/15 hover:text-white cursor-pointer transition-colors"
+                  title={t.chrono.closeSecondMapButton}
+                  aria-label={t.chrono.closeSecondMapButton}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {cursorCoords && (
@@ -1202,6 +1374,21 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
                 <span className="hidden sm:inline">{t.chrono.splitSecondMapButton}</span>
               </button>
             )}
+
+            {/* Fullscreen Toggle Button */}
+            <button
+              type="button"
+              onClick={handleToggleFullscreen}
+              className="btn-press glass-panel rounded-full p-2 text-slate-200 hover:text-white cursor-pointer transition-colors"
+              title={isFullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
+              aria-label={isFullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" />
+              )}
+            </button>
           </div>
 
           {/* Bottom-Left Layer & Zoom Pill Controls */}
@@ -1338,6 +1525,27 @@ export const HipsSkyMapPanel: React.FC<HipsSkyMapPanelProps> = ({
             </div>
           </div>
         </>
+      )}
+
+      {/* Map 1 NASA/IRSA HiPS API Down Alert */}
+      {hipsApiDown && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md pointer-events-auto">
+          <div className="glass-panel rounded-2xl border border-rose-500/40 bg-rose-950/75 px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs text-rose-100 shadow-xl">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span className="leading-snug">{t.status.map1ApiDown}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                void retryHipsApiHealth().then(() => triggerRepaint());
+              }}
+              className="btn-press px-2.5 py-1 rounded-lg bg-rose-500/25 hover:bg-rose-500/40 border border-rose-400/35 text-[11px] font-medium text-white shrink-0 cursor-pointer"
+            >
+              {t.status.retryApi}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Popover HiPS 102-Channel Spectral Slider */}

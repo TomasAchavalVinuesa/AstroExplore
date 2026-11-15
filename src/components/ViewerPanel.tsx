@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Bookmark,
@@ -15,16 +16,23 @@ import {
   Info,
   Loader2,
   Maximize2,
+  Minimize2,
   Minus,
   Move,
   Play,
   Plus,
+  SkipBack,
+  SkipForward,
   Sparkles,
+  TrendingUp,
   X,
 } from "lucide-react";
 import type {
+  CelestialTrajectoryResult,
   CollectionVersionData,
   ColormapName,
+  ExtrapolatedPosition,
+  Map2TabSession,
   RenderedCutout,
   ResolvedCelestialObject,
   SavedRoiReading,
@@ -47,8 +55,13 @@ import {
   worldToPixel,
 } from "../lib/coordinates";
 import { getRenderedCutout } from "../lib/irsa";
+import { NasaApiDownError } from "../lib/apiError";
 import { deleteRoiReading, loadSavedRoiReadings, saveRoiReading } from "../lib/roiStorage";
-import { analyzeRoiChemistry, extractRoiSpectrumFromCutouts } from "../lib/spectralAnalysis";
+import {
+  analyzeRoiChemistry,
+  computeRoiPhotocenter,
+  extractRoiSpectrumFromCutouts,
+} from "../lib/spectralAnalysis";
 import { useLanguage } from "../i18n/LanguageContext";
 import { HipsSkyMapPanel } from "./HipsSkyMapPanel";
 import { MultiVersionGallery } from "./MultiVersionGallery";
@@ -58,6 +71,10 @@ import { BlinkComparator } from "./BlinkComparator";
 import { RoiAnalysisModal } from "./RoiAnalysisModal";
 
 interface ViewerPanelProps {
+  map2Tabs: Map2TabSession[];
+  activeMap2TabId: string;
+  onSelectMap2Tab: (tabId: string) => void;
+  onCloseMap2Tab: (tabId: string) => void;
   selectedObs: SpherexObservation | null;
   cutout: RenderedCutout | null;
   cutoutLoading: boolean;
@@ -76,8 +93,52 @@ interface ViewerPanelProps {
   onToggleSecondMap: (open: boolean) => void;
   externalChannelIdx?: number | null;
   onChangeFov: (newSize: number) => void;
-  onSelectVersionObservation: (collection: SpherexCollectionId, obs: SpherexObservation) => void;
+  onSelectVersionObservation: (
+    tabId: string,
+    collection: SpherexCollectionId,
+    obs: SpherexObservation
+  ) => void;
   onQueryAtCoords?: (raDeg: number, decDeg: number) => void;
+}
+
+interface Map2TabPanelProps {
+  tabId: string;
+  isActive: boolean;
+  selectedObs: SpherexObservation | null;
+  cutout: RenderedCutout | null;
+  cutoutLoading: boolean;
+  lastCoords: { ra: number; dec: number; size: number } | null;
+  targetName?: string;
+  showCrosshair: boolean;
+  status: { text: string; isError: boolean } | null;
+  resolvedObject: ResolvedCelestialObject | null;
+  versions: Record<SpherexCollectionId, CollectionVersionData> | null;
+  activeCollection: SpherexCollectionId;
+  stretch: StretchMode;
+  colormap: ColormapName;
+  subtractZodi: boolean;
+  secondMapOpen: boolean;
+  onToggleSecondMap: (open: boolean) => void;
+  onChangeFov: (newSize: number) => void;
+  onSelectVersionObservation: (collection: SpherexCollectionId, obs: SpherexObservation) => void;
+  savedReadings: SavedRoiReading[];
+  onSaveReading: (reading: SavedRoiReading) => void;
+  onDeleteSavedReading: (id: string) => void;
+  activeTrajectory: {
+    trajectory: CelestialTrajectoryResult;
+    extrapolated: ExtrapolatedPosition | null;
+  } | null;
+  onChangeActiveTrajectory: (
+    next: {
+      trajectory: CelestialTrajectoryResult;
+      extrapolated: ExtrapolatedPosition | null;
+    } | null
+  ) => void;
+  playbackSlotEl: HTMLDivElement | null;
+  onSyncMap1Preview: (
+    scale: number,
+    corners: Array<{ ra: number; dec: number }> | null
+  ) => void;
 }
 
 const FALLBACK_EPOCHS = ["2025.5 (t₁)", "2026.0 (t₂)", "2026.5 (t₃)", "2027.0 (t₄)"];
@@ -92,7 +153,8 @@ const isSameObs = (a: SpherexObservation | null | undefined, b: SpherexObservati
   );
 };
 
-export const ViewerPanel: React.FC<ViewerPanelProps> = ({
+const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
+  isActive,
   selectedObs,
   cutout,
   cutoutLoading,
@@ -108,10 +170,15 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   subtractZodi,
   secondMapOpen,
   onToggleSecondMap,
-  externalChannelIdx,
   onChangeFov,
   onSelectVersionObservation,
-  onQueryAtCoords,
+  savedReadings,
+  onSaveReading,
+  onDeleteSavedReading,
+  activeTrajectory,
+  onChangeActiveTrajectory,
+  playbackSlotEl,
+  onSyncMap1Preview,
 }) => {
   const { t, language } = useLanguage();
   const isEn = language === "en";
@@ -126,10 +193,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     y1: number;
   } | null>(null);
   const [showRoiModal, setShowRoiModal] = useState<boolean>(false);
-  const [roiModalTab, setRoiModalTab] = useState<"current" | "compare">("current");
-  const [savedReadings, setSavedReadings] = useState<SavedRoiReading[]>(() =>
-    loadSavedRoiReadings()
-  );
+  const [roiModalTab, setRoiModalTab] = useState<"current" | "compare" | "trajectory">("current");
   const [savedCurrentRoiId, setSavedCurrentRoiId] = useState<string | null>(null);
   const [floatingSaveName, setFloatingSaveName] = useState<string>("");
   const [cutoutCursorCoords, setCutoutCursorCoords] = useState<{
@@ -162,6 +226,36 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   const [fallbackEpochIdx, setFallbackEpochIdx] = useState<number>(0);
   const [prevCutoutUrl, setPrevCutoutUrl] = useState<string | null>(null);
   const lastCutoutUrlRef = useRef<string | null>(null);
+  const [isMap2Fullscreen, setIsMap2Fullscreen] = useState<boolean>(false);
+  const [map2ApiDown, setMap2ApiDown] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (cutout) {
+      setMap2ApiDown(false);
+    }
+  }, [cutout]);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsMap2Fullscreen(document.fullscreenElement === cutoutViewportRef.current);
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    return () => document.removeEventListener("fullscreenchange", handleFsChange);
+  }, []);
+
+  const handleToggleMap2Fullscreen = async () => {
+    const el = cutoutViewportRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      // Ignore if fullscreen is blocked by browser
+    }
+  };
 
   // Date selector dropdown & preloaded epoch cutouts cache
   const [dateMenuOpen, setDateMenuOpen] = useState<boolean>(false);
@@ -415,13 +509,17 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       })
         .then((rendered) => {
           if (controller.signal.aborted) return;
+          setMap2ApiDown(false);
           setEpochCutouts((prev) => ({
             ...prev,
             [frameKey]: { status: "ready", cutout: rendered },
           }));
         })
-        .catch(() => {
+        .catch((err) => {
           if (controller.signal.aborted) return;
+          if (err instanceof NasaApiDownError) {
+            setMap2ApiDown(true);
+          }
           setEpochCutouts((prev) => ({
             ...prev,
             [frameKey]: { status: "error" },
@@ -630,13 +728,17 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       })
         .then((rendered) => {
           if (controller.signal.aborted) return;
+          setMap2ApiDown(false);
           setBandCutouts((prev) => ({
             ...prev,
             [key]: { status: "ready", cutout: rendered },
           }));
         })
-        .catch(() => {
+        .catch((err) => {
           if (controller.signal.aborted) return;
+          if (err instanceof NasaApiDownError) {
+            setMap2ApiDown(true);
+          }
           setBandCutouts((prev) => ({
             ...prev,
             [key]: { status: "error" },
@@ -888,7 +990,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
         const heightArcsec =
           Math.hypot((botMid.ra - topMid.ra) * cosDec, botMid.dec - topMid.dec) * 3600;
 
-        setSelectedRoi({
+        const baseRoi: SkyRoiSelection = {
           corners,
           centerRa: center.ra,
           centerDec: center.dec,
@@ -896,6 +998,13 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
           heightArcsec: Number.isFinite(heightArcsec) ? heightArcsec : 0,
           epochDate: selectedObs?.epoch_date ?? null,
           epochMjd: selectedObs?.t_min ?? null,
+          obsId: selectedObs?.obs_id ?? null,
+        };
+        const photocenter = computeRoiPhotocenter(baseRoi, displayCutout);
+        setSelectedRoi({
+          ...baseRoi,
+          centroidRa: photocenter?.ra,
+          centroidDec: photocenter?.dec,
         });
         setSavedCurrentRoiId(null);
         setFloatingSaveName("");
@@ -986,53 +1095,147 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     (epochFrames.length > 0 ? Math.max(1, effectivePlaybackFrames.length) : FALLBACK_EPOCHS.length) - 1
   );
 
-  return (
-    <main className="flex-1 flex flex-col gap-4 min-h-0 min-w-0">
-      {/* Status Banner (only when error or active download message) */}
-      {status && status.isError && (
-        <div className="glass-panel px-4 py-2 rounded-2xl text-xs flex items-center gap-2 border-rose-500/40 text-rose-200 shrink-0">
-          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span className="truncate">{status.text}</span>
+  const totalFramesCount =
+    epochFrames.length > 0 ? effectivePlaybackFrames.length : FALLBACK_EPOCHS.length;
+  const canStepFrames = !isPlaying && totalFramesCount > 1;
+
+  const handleStepFrame = (delta: -1 | 1) => {
+    if (!canStepFrames) return;
+    if (!secondMapOpen) {
+      onToggleSecondMap(true);
+    }
+    const nextIdx = (activeEpochIdx + delta + totalFramesCount) % totalFramesCount;
+    if (effectivePlaybackFrames.length > 0 && effectivePlaybackFrames[nextIdx]) {
+      onSelectVersionObservation(activeCollection, effectivePlaybackFrames[nextIdx]);
+    } else if (epochFrames.length === 0) {
+      setFallbackEpochIdx(nextIdx);
+    }
+  };
+
+  const renderPlaybackBar = () => (
+    <div className="glass-panel rounded-2xl px-5 py-3 flex flex-wrap items-center gap-5 w-full max-w-[740px]">
+      {/* Previous / Play-Pause / Next */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onClick={() => handleStepFrame(-1)}
+          disabled={!canStepFrames}
+          className="btn-press w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-35 disabled:cursor-not-allowed flex items-center justify-center text-white cursor-pointer"
+          title={t.chrono.prevFrameAria}
+          aria-label={t.chrono.prevFrameAria}
+        >
+          <SkipBack className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!secondMapOpen) {
+              onToggleSecondMap(true);
+            }
+            setIsPlaying((p) => !p);
+          }}
+          className="btn-press w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center text-white shrink-0 cursor-pointer"
+          aria-label={t.chrono.playPauseAria}
+        >
+          {isPlaying ? (
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="5" width="4" height="14" rx="1" />
+              <rect x="14" y="5" width="4" height="14" rx="1" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleStepFrame(1)}
+          disabled={!canStepFrames}
+          className="btn-press w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-35 disabled:cursor-not-allowed flex items-center justify-center text-white cursor-pointer"
+          title={t.chrono.nextFrameAria}
+          aria-label={t.chrono.nextFrameAria}
+        >
+          <SkipForward className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Epoch Scrubber */}
+      <div className="flex-1 min-w-[180px] space-y-1">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-slate-300 font-medium">{t.chrono.epochLabel}</span>
+          <span className="font-mono text-[#00D2FF]">{epochReadoutText}</span>
         </div>
-      )}
-
-      {/* ===================================================================== */}
-      {/* VIEWPORT AREA: 1 Map (Full Width) or Compact Map 1 + Dominant Map 2   */}
-      {/* ===================================================================== */}
-      <div
-        className={`flex-1 min-h-0 grid gap-4 transition-all duration-300 ${
-          secondMapOpen
-            ? "grid-cols-1 grid-rows-[200px_1fr] lg:grid-rows-1 lg:grid-cols-[270px_1fr] xl:grid-cols-[300px_1fr]"
-            : "grid-cols-1"
-        }`}
-      >
-        {/* MAP 1: Interactive HiPS / MOC Sky Viewport */}
-        <HipsSkyMapPanel
-          targetCoords={lastCoords}
-          targetName={resolvedObject?.canonicalName ?? targetName}
-          observations={observations}
-          selectedObs={selectedObs}
-          cutout={cutout}
-          cutoutLoading={cutoutLoading}
-          stretch={stretch}
-          colormap={colormap}
-          subtractZodi={subtractZodi}
-          secondMapOpen={secondMapOpen}
-          onToggleSecondMap={onToggleSecondMap}
-          externalChannelIdx={externalChannelIdx}
-          secondMapZoom={totalCutoutScale}
-          secondMapViewCorners={secondMapViewCorners}
-          onChangeFov={onChangeFov}
-          onSelectObservation={(obs) => onSelectVersionObservation(activeCollection, obs)}
-          onQueryAtCoords={onQueryAtCoords}
+        <input
+          type="range"
+          min={0}
+          max={maxEpochSlider}
+          step={1}
+          value={Math.min(activeEpochIdx, maxEpochSlider)}
+          onChange={(e) => {
+            const idx = parseInt(e.target.value, 10);
+            setIsPlaying(false);
+            if (!secondMapOpen) {
+              onToggleSecondMap(true);
+            }
+            if (effectivePlaybackFrames.length > 0 && effectivePlaybackFrames[idx]) {
+              onSelectVersionObservation(activeCollection, effectivePlaybackFrames[idx]);
+            } else if (epochFrames.length === 0) {
+              setFallbackEpochIdx(idx);
+            }
+          }}
+          className="apple-slider w-full"
         />
+      </div>
 
-        {/* MAP 2: Emerges Alongside Map 1 Dividing the Viewport Space in 2 */}
-        {secondMapOpen && (
-          <div
-            ref={cutoutViewportRef}
-            className="relative w-full h-full min-h-[280px] rounded-[22px] overflow-hidden border border-[#00D2FF]/45 bg-black shadow-2xl flex flex-col select-none overscroll-none"
-          >
+      {/* Video Speed */}
+      <div className="w-32 space-y-1">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-slate-300 font-medium">{t.chrono.speedLabel}</span>
+          <span className="font-mono text-slate-200">{speedMultiplier.toFixed(1)}×</span>
+        </div>
+        <input
+          type="range"
+          min={0.5}
+          max={3.0}
+          step={0.5}
+          value={speedMultiplier}
+          onChange={(e) => setSpeedMultiplier(parseFloat(e.target.value))}
+          className="apple-slider w-full"
+        />
+      </div>
+
+      {/* Multi-Version & Spectral Gallery Modal Trigger */}
+      {versions && (
+        <button
+          type="button"
+          onClick={() => setShowGalleryModal(true)}
+          className="btn-press px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-[#00D2FF]/20 border border-white/10 hover:border-[#00D2FF]/50 text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 cursor-pointer shrink-0"
+          title={t.viewer.galleryTitle}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
+          <span className="hidden sm:inline">D1–D6</span>
+        </button>
+      )}
+    </div>
+  );
+
+  useEffect(() => {
+    if (!isActive) return;
+    onSyncMap1Preview(totalCutoutScale, secondMapViewCorners);
+  }, [isActive, totalCutoutScale, secondMapViewCorners, onSyncMap1Preview]);
+
+  return (
+    <>
+      {secondMapOpen && (
+        <div
+          ref={cutoutViewportRef}
+          className={`relative w-full h-full min-h-[280px] overflow-hidden border border-[#00D2FF]/45 bg-black shadow-2xl select-none overscroll-none ${
+            isActive ? "flex-1 flex flex-col" : "hidden"
+          } ${isMap2Fullscreen ? "rounded-none" : "rounded-[22px]"}`}
+        >
             {/* Top-Left Map 2 Current Date Pill + Playback Date Selector Dropdown */}
             <div ref={dateMenuRef} className="absolute top-4 left-4 z-30 max-w-[58%]">
               <button
@@ -1218,6 +1421,37 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                       <span className="font-mono text-[10px]">{savedReadings.length}</span>
                     </button>
                   )}
+                  {savedReadings.length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoiModalTab("trajectory");
+                        setShowRoiModal(true);
+                      }}
+                      className="btn-press px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 text-amber-300 hover:bg-amber-500/15 border-l border-white/10 ml-0.5"
+                      title={
+                        isEn
+                          ? "Trace motion & extrapolate position"
+                          : "Trazar movimiento y extrapolar posición"
+                      }
+                    >
+                      <TrendingUp className="w-3 h-3" />
+                    </button>
+                  )}
+                  {activeTrajectory && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeActiveTrajectory(null)}
+                      className="btn-press px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 text-rose-300 hover:bg-rose-500/15 border-l border-white/10 ml-0.5"
+                      title={
+                        isEn
+                          ? "Hide trajectory overlay"
+                          : "Ocultar trazado de trayectoria"
+                      }
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1246,20 +1480,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>
-                {currentFov < MAX_CUTOUT_FOV_DEG && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onChangeFov(MAX_CUTOUT_FOV_DEG);
-                      setPanOffset({ x: 0, y: 0 });
-                    }}
-                    className="p-0.5 hover:text-white border-l border-white/10 pl-1 cursor-pointer"
-                    title={t.viewer.map2FovMaxTitle}
-                    aria-label={t.viewer.map2FovMaxTitle}
-                  >
-                    <Maximize2 className="w-3 h-3" />
-                  </button>
-                )}
               </div>
 
               {/* Switch between Cutout+WCS and 6-Bands Grid inside Map 2 */}
@@ -1290,6 +1510,21 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 </button>
               </div>
 
+              {/* Fullscreen Toggle for Map 2 */}
+              <button
+                type="button"
+                onClick={handleToggleMap2Fullscreen}
+                className="btn-press glass-panel w-8 h-8 rounded-full flex items-center justify-center text-slate-300 hover:text-white cursor-pointer"
+                title={isMap2Fullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
+                aria-label={isMap2Fullscreen ? t.chrono.exitFullscreen : t.chrono.enterFullscreen}
+              >
+                {isMap2Fullscreen ? (
+                  <Minimize2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5" />
+                )}
+              </button>
+
               {/* Close 2nd Map (Restores Map 1 to 100% Width) */}
               <button
                 type="button"
@@ -1300,6 +1535,16 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Map 2 NASA/IRSA API Down Alert */}
+            {(map2ApiDown || (status?.isError && status.text === t.status.map2ApiDown)) && (
+              <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md pointer-events-auto">
+                <div className="glass-panel rounded-2xl border border-rose-500/40 bg-rose-950/75 px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-rose-100 shadow-xl">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="leading-snug">{t.status.map2ApiDown}</span>
+                </div>
+              </div>
+            )}
 
             {/* Map 2 Content Body */}
             {secondMapTab === "cutout" ? (
@@ -1402,6 +1647,127 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           <span className="absolute -bottom-1 -right-1 w-2 h-2 bg-emerald-300 rounded-[1px]" />
                         </div>
                       )}
+
+                      {/* Celestial Motion Trajectory & Extrapolation Overlay */}
+                      {activeTrajectory && displayCutout?.wcs && (() => {
+                        const wcs = displayCutout.wcs;
+                        const toPct = (ra: number, dec: number) => {
+                          const p = worldToPixel(ra, dec, wcs);
+                          if (!p) return null;
+                          const xFrac = (p.px - 0.5) / displayCutout.width;
+                          const yFrac = 1 - (p.py - 0.5) / displayCutout.height;
+                          return {
+                            x: (0.5 + (xFrac - cutoutViewCenter.cx) * totalCutoutScale) * 100,
+                            y: (0.5 + (yFrac - cutoutViewCenter.cy) * totalCutoutScale) * 100,
+                          };
+                        };
+
+                        const obsPts = activeTrajectory.trajectory.points
+                          .map((pt, idx) => {
+                            const pos = toPct(pt.ra, pt.dec);
+                            return pos ? { ...pt, idx, x: pos.x, y: pos.y } : null;
+                          })
+                          .filter((v): v is NonNullable<typeof v> => v !== null);
+
+                        const extrap = activeTrajectory.extrapolated
+                          ? (() => {
+                              const pos = toPct(
+                                activeTrajectory.extrapolated!.ra,
+                                activeTrajectory.extrapolated!.dec
+                              );
+                              if (!pos) return null;
+                              const pxScale =
+                                Math.hypot(wcs.cd1_1, wcs.cd2_1) * 3600 || 6.2;
+                              const radiusPct = Math.max(
+                                1.5,
+                                ((activeTrajectory.extrapolated!.uncertaintyArcsec / pxScale) /
+                                  displayCutout.width) *
+                                  totalCutoutScale *
+                                  100
+                              );
+                              return {
+                                ...activeTrajectory.extrapolated!,
+                                x: pos.x,
+                                y: pos.y,
+                                radiusPct,
+                              };
+                            })()
+                          : null;
+
+                        if (obsPts.length === 0) return null;
+                        const polyPoints = obsPts
+                          .map((p) => `${(p.x * 10).toFixed(1)},${(p.y * 10).toFixed(1)}`)
+                          .join(" ");
+                        const lastObs = obsPts[obsPts.length - 1];
+
+                        return (
+                          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                            <svg
+                              viewBox="0 0 1000 1000"
+                              preserveAspectRatio="none"
+                              className="absolute inset-0 w-full h-full"
+                            >
+                              {obsPts.length >= 2 && (
+                                <polyline
+                                  fill="none"
+                                  stroke="#00D2FF"
+                                  strokeWidth="4"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  points={polyPoints}
+                                />
+                              )}
+                              {extrap && (
+                                <line
+                                  x1={(lastObs.x * 10).toFixed(1)}
+                                  y1={(lastObs.y * 10).toFixed(1)}
+                                  x2={(extrap.x * 10).toFixed(1)}
+                                  y2={(extrap.y * 10).toFixed(1)}
+                                  stroke="#fbbf24"
+                                  strokeWidth="4"
+                                  strokeDasharray="10 8"
+                                  strokeLinecap="round"
+                                />
+                              )}
+                            </svg>
+
+                            {obsPts.map((pt) => (
+                              <div
+                                key={pt.readingId}
+                                className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center"
+                                style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
+                              >
+                                <div className="w-5 h-5 rounded-full bg-[#00D2FF] text-slate-950 font-mono text-[10px] font-bold flex items-center justify-center shadow-[0_0_10px_rgba(0,210,255,0.85)] border border-white">
+                                  {pt.idx + 1}
+                                </div>
+                                <span className="mt-1 px-1.5 py-0.5 rounded bg-black/80 border border-[#00D2FF]/50 font-mono text-[9px] text-[#00D2FF] whitespace-nowrap">
+                                  {pt.epochDate}
+                                </span>
+                              </div>
+                            ))}
+
+                            {extrap && (
+                              <div
+                                className="absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center"
+                                style={{ left: `${extrap.x}%`, top: `${extrap.y}%` }}
+                              >
+                                <div
+                                  className="rounded-full border border-dashed border-amber-300/80 bg-amber-400/15 flex items-center justify-center"
+                                  style={{
+                                    width: `${Math.min(180, Math.max(24, extrap.radiusPct * 4))}px`,
+                                    height: `${Math.min(180, Math.max(24, extrap.radiusPct * 4))}px`,
+                                  }}
+                                >
+                                  <div className="w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-white shadow-[0_0_12px_rgba(251,191,36,0.9)]" />
+                                </div>
+                                <span className="absolute top-full mt-1 px-1.5 py-0.5 rounded bg-black/85 border border-amber-400/60 font-mono text-[9px] text-amber-300 whitespace-nowrap">
+                                  {extrap.targetDate} (±{extrap.uncertaintyArcsec.toFixed(1)}″)
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Callout Card Anchored Directly to Selected ROI */}
@@ -1435,7 +1801,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         const trimmed = floatingSaveName.trim();
                         if (!trimmed || !roiAnalysis) return;
                         const id = `roi_${Date.now()}`;
-                        const next = saveRoiReading({
+                        onSaveReading({
                           id,
                           name: trimmed,
                           savedAt: new Date().toISOString(),
@@ -1444,7 +1810,6 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                           roi: selectedRoi,
                           analysis: roiAnalysis,
                         });
-                        setSavedReadings(next);
                         setSavedCurrentRoiId(id);
                         setFloatingSaveName("");
                       };
@@ -1869,101 +2234,25 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                 />
               </div>
             )}
+
+            {/* Video Playback Bar inside Map 2 when in Fullscreen */}
+            {isActive && isMap2Fullscreen && (
+              <div className="px-4 pb-4 pt-1 flex justify-center shrink-0 z-30">
+                {renderPlaybackBar()}
+              </div>
+            )}
           </div>
         )}
-      </div>
 
       {/* ===================================================================== */}
-      {/* FLOATING TRANSLUCENT PLAYBACK BAR (Exact CHRONO-SPHEREx design)       */}
+      {/* FLOATING TRANSLUCENT PLAYBACK BAR (Portaled to bottom slot)           */}
       {/* ===================================================================== */}
-      <div className="flex justify-center shrink-0">
-        <div className="glass-panel rounded-2xl px-5 py-3 flex flex-wrap items-center gap-5 w-full max-w-[740px]">
-          {/* Play / Pause */}
-          <button
-            type="button"
-            onClick={() => {
-              if (!secondMapOpen) {
-                onToggleSecondMap(true);
-              }
-              setIsPlaying((p) => !p);
-            }}
-            className="btn-press w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center text-white shrink-0 cursor-pointer"
-            aria-label={t.chrono.playPauseAria}
-          >
-            {isPlaying ? (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <rect x="6" y="5" width="4" height="14" rx="1" />
-                <rect x="14" y="5" width="4" height="14" rx="1" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            )}
-          </button>
-
-          {/* Epoch Scrubber */}
-          <div className="flex-1 min-w-[180px] space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-300 font-medium">{t.chrono.epochLabel}</span>
-              <span className="font-mono text-[#00D2FF]">{epochReadoutText}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={maxEpochSlider}
-              step={1}
-              value={Math.min(activeEpochIdx, maxEpochSlider)}
-              onChange={(e) => {
-                const idx = parseInt(e.target.value, 10);
-                setIsPlaying(false);
-                if (!secondMapOpen) {
-                  onToggleSecondMap(true);
-                }
-                if (effectivePlaybackFrames.length > 0 && effectivePlaybackFrames[idx]) {
-                  onSelectVersionObservation(activeCollection, effectivePlaybackFrames[idx]);
-                } else if (epochFrames.length === 0) {
-                  setFallbackEpochIdx(idx);
-                }
-              }}
-              className="apple-slider w-full"
-            />
-          </div>
-
-          {/* Video Speed */}
-          <div className="w-32 space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-300 font-medium">{t.chrono.speedLabel}</span>
-              <span className="font-mono text-slate-200">{speedMultiplier.toFixed(1)}×</span>
-            </div>
-            <input
-              type="range"
-              min={0.5}
-              max={3.0}
-              step={0.5}
-              value={speedMultiplier}
-              onChange={(e) => setSpeedMultiplier(parseFloat(e.target.value))}
-              className="apple-slider w-full"
-            />
-          </div>
-
-          {/* Multi-Version & Spectral Gallery Modal Trigger */}
-          {versions && (
-            <button
-              type="button"
-              onClick={() => setShowGalleryModal(true)}
-              className="btn-press px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-[#00D2FF]/20 border border-white/10 hover:border-[#00D2FF]/50 text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 cursor-pointer shrink-0"
-              title={t.viewer.galleryTitle}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
-              <span className="hidden sm:inline">D1–D6</span>
-            </button>
-          )}
-        </div>
-      </div>
+      {isActive && !isMap2Fullscreen && playbackSlotEl
+        ? createPortal(renderPlaybackBar(), playbackSlotEl)
+        : null}
 
       {/* Optional Multi-Version & Multi-Band Gallery Modal */}
-      {showGalleryModal && (
+      {isActive && showGalleryModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glass-panel rounded-[24px] w-full max-w-4xl max-h-[85vh] overflow-y-auto p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -1998,7 +2287,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
       )}
 
       <RoiAnalysisModal
-        isOpen={showRoiModal}
+        isOpen={isActive && showRoiModal}
         initialTab={roiModalTab}
         roi={selectedRoi}
         analysis={roiAnalysis}
@@ -2011,7 +2300,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
         onSaveReading={(name) => {
           if (!selectedRoi || !roiAnalysis) return;
           const id = `roi_${Date.now()}`;
-          const next = saveRoiReading({
+          onSaveReading({
             id,
             name,
             savedAt: new Date().toISOString(),
@@ -2019,11 +2308,10 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
             roi: selectedRoi,
             analysis: roiAnalysis,
           });
-          setSavedReadings(next);
           setSavedCurrentRoiId(id);
         }}
         onDeleteSavedReading={(id) => {
-          setSavedReadings(deleteRoiReading(id));
+          onDeleteSavedReading(id);
           if (savedCurrentRoiId === id) setSavedCurrentRoiId(null);
         }}
         onScanAllBands={handleScanAllBands}
@@ -2034,8 +2322,222 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
           setSavedCurrentRoiId(null);
           setShowRoiModal(false);
         }}
+        onShowTrajectoryOnMap={(trajectory, extrapolated) => {
+          onChangeActiveTrajectory({ trajectory, extrapolated });
+          setSecondMapTab("cutout");
+        }}
         onClose={() => setShowRoiModal(false)}
       />
+    </>
+  );
+};
+
+export const ViewerPanel: React.FC<ViewerPanelProps> = ({
+  map2Tabs,
+  activeMap2TabId,
+  onSelectMap2Tab,
+  onCloseMap2Tab,
+  selectedObs,
+  cutout,
+  cutoutLoading,
+  lastCoords,
+  targetName = "WISE 0855",
+  showCrosshair,
+  status,
+  resolvedObject,
+  versions,
+  activeCollection,
+  stretch,
+  colormap,
+  subtractZodi,
+  secondMapOpen,
+  onToggleSecondMap,
+  externalChannelIdx,
+  onChangeFov,
+  onSelectVersionObservation,
+  onQueryAtCoords,
+}) => {
+  const { language } = useLanguage();
+  const isEn = language === "en";
+  const [savedReadings, setSavedReadings] = useState<SavedRoiReading[]>(() =>
+    loadSavedRoiReadings()
+  );
+  const [activeTrajectory, setActiveTrajectory] = useState<{
+    trajectory: CelestialTrajectoryResult;
+    extrapolated: ExtrapolatedPosition | null;
+  } | null>(null);
+  const [playbackSlotEl, setPlaybackSlotEl] = useState<HTMLDivElement | null>(null);
+  const [map1Preview, setMap1Preview] = useState<{
+    scale: number;
+    corners: Array<{ ra: number; dec: number }> | null;
+  }>({ scale: 1, corners: null });
+
+  const handleSyncMap1Preview = React.useCallback(
+    (scale: number, corners: Array<{ ra: number; dec: number }> | null) => {
+      setMap1Preview((prev) => {
+        if (prev.scale === scale && prev.corners === corners) return prev;
+        return { scale, corners };
+      });
+    },
+    []
+  );
+
+  const handleSaveReading = React.useCallback((reading: SavedRoiReading) => {
+    setSavedReadings(saveRoiReading(reading));
+  }, []);
+
+  const handleDeleteSavedReading = React.useCallback((id: string) => {
+    setSavedReadings(deleteRoiReading(id));
+  }, []);
+
+  const activeVersionData = versions ? versions[activeCollection] : null;
+  const observations = activeVersionData?.observations ?? [];
+
+  return (
+    <main className="flex-1 flex flex-col gap-4 min-h-0 min-w-0">
+      {/* Status Banner (only when error) */}
+      {status && status.isError && (
+        <div className="glass-panel px-4 py-2 rounded-2xl text-xs flex items-center gap-2 border-rose-500/40 text-rose-200 shrink-0">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span className="truncate">{status.text}</span>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* VIEWPORT AREA: 1 Map (Full Width) or Compact Map 1 + Tabbed Map 2     */}
+      {/* ===================================================================== */}
+      <div
+        className={`flex-1 min-h-0 grid gap-4 transition-all duration-300 ${
+          secondMapOpen
+            ? "grid-cols-1 grid-rows-[200px_1fr] lg:grid-rows-1 lg:grid-cols-[270px_1fr] xl:grid-cols-[300px_1fr]"
+            : "grid-cols-1"
+        }`}
+      >
+        {/* MAP 1: Interactive HiPS / MOC Sky Viewport */}
+        <HipsSkyMapPanel
+          targetCoords={lastCoords}
+          targetName={resolvedObject?.canonicalName ?? targetName}
+          observations={observations}
+          selectedObs={selectedObs}
+          cutout={cutout}
+          cutoutLoading={cutoutLoading}
+          stretch={stretch}
+          colormap={colormap}
+          subtractZodi={subtractZodi}
+          secondMapOpen={secondMapOpen}
+          onToggleSecondMap={onToggleSecondMap}
+          externalChannelIdx={externalChannelIdx}
+          secondMapZoom={map1Preview.scale}
+          secondMapViewCorners={map1Preview.corners}
+          activeTrajectory={activeTrajectory}
+          onChangeFov={onChangeFov}
+          onSelectObservation={(obs) =>
+            onSelectVersionObservation(activeMap2TabId, activeCollection, obs)
+          }
+          onQueryAtCoords={onQueryAtCoords}
+        />
+
+        {/* MAP 2: Tabbed Multi-Coordinate Viewports */}
+        <div className={secondMapOpen ? "flex flex-col gap-2 min-h-0 h-full" : "hidden"}>
+          {secondMapOpen && map2Tabs.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 shrink-0">
+              {map2Tabs.map((tab) => {
+                const isTabActive = tab.id === activeMap2TabId;
+                const isBusy = tab.loading || tab.cutoutLoading;
+                const hasError = Boolean(tab.status?.isError);
+                return (
+                  <div
+                    key={tab.id}
+                    onClick={() => onSelectMap2Tab(tab.id)}
+                    role="tab"
+                    aria-selected={isTabActive}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelectMap2Tab(tab.id);
+                      }
+                    }}
+                    className={`group flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono border cursor-pointer transition-colors shrink-0 max-w-[210px] ${
+                      isTabActive
+                        ? "bg-[#00D2FF]/15 border-[#00D2FF]/60 text-white shadow-[0_0_12px_rgba(0,210,255,0.2)]"
+                        : "bg-white/[0.04] border-white/10 text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]"
+                    }`}
+                  >
+                    {isBusy ? (
+                      <Loader2 className="w-3 h-3 animate-spin text-[#00D2FF] shrink-0" />
+                    ) : (
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          hasError
+                            ? "bg-rose-400"
+                            : isTabActive
+                              ? "bg-[#00D2FF]"
+                              : "bg-emerald-400"
+                        }`}
+                      />
+                    )}
+                    <span className="truncate">{tab.label}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCloseMap2Tab(tab.id);
+                      }}
+                      aria-label={isEn ? "Close tab" : "Cerrar pestaña"}
+                      title={isEn ? "Close tab" : "Cerrar pestaña"}
+                      className="p-0.5 rounded-full text-slate-400 hover:text-white hover:bg-white/15 cursor-pointer shrink-0"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {map2Tabs.map((tab) => {
+            const tabObsList = tab.versions?.[tab.activeCollection]?.observations ?? [];
+            const tabSelectedObs = tabObsList[tab.selectedIdx] ?? null;
+            return (
+              <Map2TabPanel
+                key={tab.id}
+                tabId={tab.id}
+                isActive={tab.id === activeMap2TabId}
+                selectedObs={tabSelectedObs}
+                cutout={tab.cutout}
+                cutoutLoading={tab.cutoutLoading}
+                lastCoords={tab.lastCoords}
+                targetName={tab.targetName}
+                showCrosshair={showCrosshair}
+                status={tab.status}
+                resolvedObject={tab.resolvedObject}
+                versions={tab.versions}
+                activeCollection={tab.activeCollection}
+                stretch={stretch}
+                colormap={colormap}
+                subtractZodi={subtractZodi}
+                secondMapOpen={secondMapOpen}
+                onToggleSecondMap={onToggleSecondMap}
+                onChangeFov={onChangeFov}
+                onSelectVersionObservation={(col, obs) =>
+                  onSelectVersionObservation(tab.id, col, obs)
+                }
+                savedReadings={savedReadings}
+                onSaveReading={handleSaveReading}
+                onDeleteSavedReading={handleDeleteSavedReading}
+                activeTrajectory={activeTrajectory}
+                onChangeActiveTrajectory={setActiveTrajectory}
+                playbackSlotEl={playbackSlotEl}
+                onSyncMap1Preview={handleSyncMap1Preview}
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Bottom Floating Playback Bar Slot */}
+      <div ref={setPlaybackSlotEl} className="flex justify-center shrink-0" />
     </main>
   );
 };
