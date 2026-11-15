@@ -163,9 +163,9 @@ In accordance with the NASA Space Apps Challenge 2026 submission guidelines:
 
 ##  Team — Ley de Conservación del Mate
 
-- **Jonás Villegas** — Lead Developer & Data Pipeline
-- **Tomás Achával** — Research & Analysis
+- **Jonás Villegas** — Research & Analysis
+- **Tomás Achával** —  Lead Developer & Data Pipeline
 - **Joaquín Barrionuevo** — Astrophysics & Data
 - **Facundo Bazán** — UI/UX & Frontend
-- **Uriel Domínguez** — Scientific Visualization
+- **Uriel Domínguez** — Marketing
 - **Jeremías Nolte** — Documentation & Review
