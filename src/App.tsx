@@ -154,6 +154,11 @@ export default function App() {
   const cosmicBgRef = useRef<CosmicBackgroundHandle | null>(null);
   const [cursorSky, setCursorSky] = useState<{ ra: number; dec: number } | null>(null);
   const [cursorAudioEnabled, setCursorAudioEnabled] = useState(true);
+  const ENTRY_MUSIC_VOLUME = 0.78;
+  const EXPLORER_MUSIC_VOLUME = 0.14;
+  const [explorerVolume, setExplorerVolume] = useState<number>(EXPLORER_MUSIC_VOLUME);
+  const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const prevScreenRef = useRef<ScreenId>(currentScreen);
   const [warping, setWarping] = useState(false);
 
   const [raInput, setRaInput] = useState("08h55m10.831s");
@@ -747,41 +752,64 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [urlErrorModal]);
 
+  // Shared full warp + loading animation when leaving the entry screen
+  const runEntryExitTransition = useCallback(
+    async (
+      warpTarget: { ra: number; dec: number } | null,
+      workPromise: Promise<unknown>
+    ) => {
+      const WARP_DURATION_MS = 1550;
+      setWarping(true);
+      setCurrentScreen("loading");
+      setLoadingProgress(20);
+
+      const warpPromise =
+        cosmicBgRef.current?.warpTo(warpTarget, WARP_DURATION_MS) ??
+        new Promise<void>((resolve) => window.setTimeout(resolve, WARP_DURATION_MS));
+
+      const minDurationPromise = new Promise<void>((resolve) =>
+        window.setTimeout(resolve, WARP_DURATION_MS)
+      );
+
+      const step1Timer = window.setTimeout(() => {
+        setLoadingProgress(60);
+      }, 420);
+      const step2Timer = window.setTimeout(() => {
+        setLoadingProgress(90);
+      }, 980);
+
+      await Promise.all([
+        warpPromise,
+        minDurationPromise,
+        Promise.race([
+          workPromise,
+          new Promise<void>((resolve) => window.setTimeout(resolve, WARP_DURATION_MS + 200)),
+        ]),
+      ]);
+
+      window.clearTimeout(step1Timer);
+      window.clearTimeout(step2Timer);
+      setLoadingProgress(100);
+      setWarping(false);
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 220));
+      setCurrentScreen("explorer");
+    },
+    []
+  );
+
   // Launch from Screen 1 (Entry) -> Warp + Screen 2 (Loading) -> Screen 3 (Explorer)
   const launchExplorer = useCallback(async () => {
-    setWarping(true);
     const raDeg = parseRA(raInput);
     const decDeg = parseDec(decInput);
     const warpTarget = raDeg !== null && decDeg !== null ? { ra: raDeg, dec: decDeg } : null;
-    const warpPromise = cosmicBgRef.current?.warpTo(warpTarget, 1200) ?? Promise.resolve();
-
-    setCurrentScreen("loading");
-    setLoadingProgress(25);
 
     const searchPromise = versions
       ? Promise.resolve()
       : executeSearch(raInput, decInput, collectionMode, band, radius, size);
 
-    const stepTimer = window.setTimeout(() => {
-      setLoadingProgress(85);
-    }, 320);
-
-    await Promise.all([
-      warpPromise,
-      Promise.race([
-        searchPromise,
-        new Promise((resolve) => window.setTimeout(resolve, 1400)),
-      ]),
-    ]);
-
-    window.clearTimeout(stepTimer);
-    setLoadingProgress(100);
-    setWarping(false);
-
-    window.setTimeout(() => {
-      setCurrentScreen("explorer");
-    }, 200);
-  }, [versions, executeSearch, raInput, decInput, collectionMode, band, radius, size]);
+    await runEntryExitTransition(warpTarget, searchPromise);
+  }, [versions, executeSearch, raInput, decInput, collectionMode, band, radius, size, runEntryExitTransition]);
 
   const launchToCoords = useCallback(
     async (params: {
@@ -793,7 +821,6 @@ export default function App() {
       preset?: TargetPreset | null;
       resolved?: ResolvedCelestialObject | null;
     }) => {
-      setWarping(true);
       const nextCollection = params.preset?.collection ?? collectionMode;
       const nextTargetName =
         params.targetLabel ?? params.preset?.label ?? t.chrono.customSkyPatch;
@@ -812,13 +839,6 @@ export default function App() {
         forceReuse: true,
       });
 
-      const warpPromise =
-        cosmicBgRef.current?.warpTo({ ra: params.raDeg, dec: params.decDeg }, 1200) ??
-        Promise.resolve();
-
-      setCurrentScreen("loading");
-      setLoadingProgress(25);
-
       const searchPromise = executeSearchForTab(
         tabId,
         params.ra,
@@ -829,27 +849,9 @@ export default function App() {
         size
       );
 
-      const stepTimer = window.setTimeout(() => {
-        setLoadingProgress(85);
-      }, 320);
-
-      await Promise.all([
-        warpPromise,
-        Promise.race([
-          searchPromise,
-          new Promise((resolve) => window.setTimeout(resolve, 1400)),
-        ]),
-      ]);
-
-      window.clearTimeout(stepTimer);
-      setLoadingProgress(100);
-      setWarping(false);
-
-      window.setTimeout(() => {
-        setCurrentScreen("explorer");
-      }, 200);
+      await runEntryExitTransition({ ra: params.raDeg, dec: params.decDeg }, searchPromise);
     },
-    [band, collectionMode, executeSearch, radius, size, t.chrono.customSkyPatch]
+    [band, collectionMode, executeSearchForTab, openOrReuseMap2Tab, radius, size, t.chrono.customSkyPatch, runEntryExitTransition]
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1123,8 +1125,59 @@ export default function App() {
 
   const selectedObs = observations[selectedIdx] ?? null;
 
+  // Sync background music volume, mute state, and autoplay
+  useEffect(() => {
+    const audio = bgAudioRef.current;
+    if (!audio) return;
+
+    const targetVol = currentScreen === "entry" ? ENTRY_MUSIC_VOLUME : explorerVolume;
+    audio.loop = true;
+    audio.muted = !cursorAudioEnabled;
+    audio.volume = cursorAudioEnabled ? targetVol : 0;
+
+    if (cursorAudioEnabled && audio.paused) {
+      void audio.play().catch(() => {});
+    }
+  }, [currentScreen, cursorAudioEnabled, explorerVolume]);
+
+  // Restart background music and lower volume when leaving the entry screen
+  useEffect(() => {
+    const audio = bgAudioRef.current;
+    const prevScreen = prevScreenRef.current;
+    prevScreenRef.current = currentScreen;
+
+    if (!audio) return;
+    if (prevScreen === "entry" && currentScreen !== "entry") {
+      audio.currentTime = 0;
+      setExplorerVolume(EXPLORER_MUSIC_VOLUME);
+      audio.volume = cursorAudioEnabled ? EXPLORER_MUSIC_VOLUME : 0;
+      audio.loop = true;
+      if (cursorAudioEnabled) {
+        void audio.play().catch(() => {});
+      }
+    }
+  }, [currentScreen, cursorAudioEnabled]);
+
+  // Unlock background music autoplay on first user interaction if blocked by browser policy
+  useEffect(() => {
+    const tryPlayBgMusic = () => {
+      const audio = bgAudioRef.current;
+      if (!audio || !cursorAudioEnabled || !audio.paused) return;
+      void audio.play().catch(() => {});
+    };
+
+    window.addEventListener("pointerdown", tryPlayBgMusic, { passive: true });
+    window.addEventListener("keydown", tryPlayBgMusic, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", tryPlayBgMusic);
+      window.removeEventListener("keydown", tryPlayBgMusic);
+    };
+  }, [cursorAudioEnabled]);
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#080B10] text-slate-100 select-none">
+      {/* Background Space Music */}
+      <audio ref={bgAudioRef} src="/music.mp3" loop autoPlay preload="auto" />
       {/* Interactive 3D Galaxy + Starfield + Celestial Graticule Canvas */}
       <CosmicBackground
         ref={cosmicBgRef}
@@ -1195,30 +1248,65 @@ export default function App() {
         </div>
       )}
 
-      {/* Persistent Top-Right Language & Entry Audio Pills */}
+      {/* Persistent Top-Right Language, Audio Mute & Volume Pills */}
       <div className="fixed top-6 right-7 z-30 flex items-center gap-2">
-        {currentScreen === "entry" && (
-          <button
-            type="button"
-            onClick={() => setCursorAudioEnabled((prev) => !prev)}
-            aria-pressed={cursorAudioEnabled}
-            aria-label={t.chrono.cursorAudioAria}
-            title={cursorAudioEnabled ? t.chrono.cursorAudioOn : t.chrono.cursorAudioOff}
-            className={`btn-press glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-xs font-medium cursor-pointer transition-colors ${
-              cursorAudioEnabled
-                ? "text-[#00D2FF] border-[#00D2FF]/45 hover:border-[#00D2FF]/75"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            {cursorAudioEnabled ? (
-              <Volume2 className="w-3.5 h-3.5 shrink-0" />
-            ) : (
-              <VolumeX className="w-3.5 h-3.5 shrink-0" />
-            )}
-            <span className="hidden sm:inline">
-              {cursorAudioEnabled ? t.chrono.cursorAudioOn : t.chrono.cursorAudioOff}
+        <button
+          type="button"
+          onClick={() => {
+            setCursorAudioEnabled((prev) => {
+              const next = !prev;
+              if (next && explorerVolume === 0) {
+                setExplorerVolume(EXPLORER_MUSIC_VOLUME);
+              }
+              return next;
+            });
+          }}
+          aria-pressed={cursorAudioEnabled}
+          aria-label={t.chrono.cursorAudioAria}
+          title={cursorAudioEnabled ? t.chrono.cursorAudioOn : t.chrono.cursorAudioOff}
+          className={`btn-press glass-panel rounded-full px-3 py-1.5 flex items-center gap-1.5 text-xs font-medium cursor-pointer transition-colors ${
+            cursorAudioEnabled
+              ? "text-[#00D2FF] border-[#00D2FF]/45 hover:border-[#00D2FF]/75"
+              : "text-slate-400 hover:text-white"
+          }`}
+        >
+          {cursorAudioEnabled ? (
+            <Volume2 className="w-3.5 h-3.5 shrink-0" />
+          ) : (
+            <VolumeX className="w-3.5 h-3.5 shrink-0" />
+          )}
+          <span className="hidden sm:inline">
+            {cursorAudioEnabled ? t.chrono.cursorAudioOn : t.chrono.cursorAudioOff}
+          </span>
+        </button>
+
+        {currentScreen !== "entry" && (
+          <div className="glass-panel rounded-full px-3 py-1.5 flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={cursorAudioEnabled ? explorerVolume : 0}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setExplorerVolume(val);
+                if (val > 0 && !cursorAudioEnabled) {
+                  setCursorAudioEnabled(true);
+                } else if (val === 0 && cursorAudioEnabled) {
+                  setCursorAudioEnabled(false);
+                }
+              }}
+              aria-label={t.chrono.musicVolumeAria}
+              title={`${t.chrono.musicVolumeAria}: ${Math.round(
+                (cursorAudioEnabled ? explorerVolume : 0) * 100
+              )}%`}
+              className="apple-slider w-20 sm:w-24 cursor-pointer"
+            />
+            <span className="text-[11px] font-mono text-slate-300 w-8 text-right tabular-nums">
+              {Math.round((cursorAudioEnabled ? explorerVolume : 0) * 100)}%
             </span>
-          </button>
+          </div>
         )}
         <LanguageSelector />
       </div>

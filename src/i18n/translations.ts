@@ -86,6 +86,8 @@ export interface Translations {
     decAxisLabel: string;
     emptyTitle: string;
     emptySubtitle: string;
+    apiErrorTitle: string;
+    apiErrorSubtitle: string;
     queryingApiTitle: string;
     queryingApiSubtitle: string;
     detectorBand: string;
@@ -270,6 +272,7 @@ export interface Translations {
     cursorAudioOn: string;
     cursorAudioOff: string;
     cursorAudioAria: string;
+    musicVolumeAria: string;
     molecules: {
       h2o: string;
       co2: string;
@@ -384,6 +387,9 @@ export const translations: Record<Language, Translations> = {
       emptyTitle: "Aún no se ha realizado ninguna consulta",
       emptySubtitle:
         "Selecciona un cuerpo celeste o escribe coordenadas para visualizar sus imágenes detalladas",
+      apiErrorTitle: "Falló la consulta a la API de NASA/IRSA",
+      apiErrorSubtitle:
+        "El servicio no respondió correctamente. Por favor, reintenta más tarde.",
       queryingApiTitle: "Realizando consulta a la API de NASA/IRSA...",
       queryingApiSubtitle: "Buscando observaciones espectrales disponibles para estas coordenadas",
       detectorBand: "Detector / Banda",
@@ -585,7 +591,8 @@ export const translations: Record<Language, Translations> = {
       noDateLabel: "Sin fecha",
       cursorAudioOn: "Audio activo",
       cursorAudioOff: "Audio silenciado",
-      cursorAudioAria: "Activar o silenciar sonido espacial del cursor",
+      cursorAudioAria: "Activar o silenciar sonido espacial",
+      musicVolumeAria: "Volumen de la música de fondo",
       molecules: {
         h2o: "Hielo de agua (H₂O)",
         co2: "Dióxido de carbono (CO₂)",
@@ -796,6 +803,9 @@ export const translations: Record<Language, Translations> = {
       emptyTitle: "No query performed yet",
       emptySubtitle:
         "Select a celestial body or enter coordinates to view its detailed images",
+      apiErrorTitle: "NASA/IRSA API request failed",
+      apiErrorSubtitle:
+        "The service did not respond properly. Please retry later.",
       queryingApiTitle: "Querying NASA/IRSA API...",
       queryingApiSubtitle: "Searching for available spectral observations at these coordinates",
       detectorBand: "Detector / Band",
@@ -997,7 +1007,8 @@ export const translations: Record<Language, Translations> = {
       noDateLabel: "No date",
       cursorAudioOn: "Audio on",
       cursorAudioOff: "Audio muted",
-      cursorAudioAria: "Toggle cursor space audio",
+      cursorAudioAria: "Toggle space audio",
+      musicVolumeAria: "Background music volume",
       molecules: {
         h2o: "Water Ice (H₂O)",
         co2: "Carbon Dioxide (CO₂)",

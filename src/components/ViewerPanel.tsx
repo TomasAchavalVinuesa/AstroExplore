@@ -2092,6 +2092,16 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                       </p>
                     )}
                   </div>
+                ) : isApiDownOrError ? (
+                  <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-rose-200">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center">
+                      <AlertCircle className="w-5 h-5 text-rose-400" />
+                    </div>
+                    <p className="text-xs font-medium text-rose-200">{t.viewer.apiErrorTitle}</p>
+                    <p className="text-[11px] text-rose-300/75 max-w-xs">
+                      {t.viewer.apiErrorSubtitle}
+                    </p>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
                     <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center">
