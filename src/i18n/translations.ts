@@ -273,6 +273,12 @@ export interface Translations {
     cursorAudioOff: string;
     cursorAudioAria: string;
     musicVolumeAria: string;
+    musicOn: string;
+    musicOff: string;
+    musicAria: string;
+    sfxOn: string;
+    sfxOff: string;
+    sfxAria: string;
     molecules: {
       h2o: string;
       co2: string;
@@ -681,6 +687,12 @@ export const translations: Record<Language, Translations> = {
       cursorAudioOff: "Audio silenciado",
       cursorAudioAria: "Activar o silenciar sonido espacial",
       musicVolumeAria: "Volumen de la música de fondo",
+      musicOn: "Música",
+      musicOff: "Música silenciada",
+      musicAria: "Activar o silenciar música de fondo",
+      sfxOn: "Sonidos",
+      sfxOff: "Sonidos silenciados",
+      sfxAria: "Activar o silenciar efectos de sonido",
       molecules: {
         h2o: "Hielo de agua (H₂O)",
         co2: "Dióxido de carbono (CO₂)",
@@ -1323,6 +1335,12 @@ export const translations: Record<Language, Translations> = {
       cursorAudioOff: "Audio muted",
       cursorAudioAria: "Toggle space audio",
       musicVolumeAria: "Background music volume",
+      musicOn: "Music",
+      musicOff: "Music muted",
+      musicAria: "Toggle background music",
+      sfxOn: "Sounds",
+      sfxOff: "Sounds muted",
+      sfxAria: "Toggle sound effects",
       molecules: {
         h2o: "Water Ice (H₂O)",
         co2: "Carbon Dioxide (CO₂)",

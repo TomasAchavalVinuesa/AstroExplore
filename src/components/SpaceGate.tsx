@@ -24,6 +24,7 @@ import {
 import { useLanguage } from "../i18n/LanguageContext";
 import { CursorAudioEngine } from "../lib/cursorAudio";
 import type { MusicMetrics } from "../lib/musicAnalyser";
+import { playCoordChangeSound } from "../lib/soundEffects";
 import { CoordinateFormatToggle } from "./CoordinateFormatToggle";
 import type {
   CollectionQueryMode,
@@ -537,10 +538,11 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
           }
         }
 
+        const warpExpand = wstate && !reduced ? Math.pow(warpProgress, 0.75) * 2.8 : 0;
         const gScale =
           Math.min(w, h) *
           (0.5 + dim * 0.1) *
-          (1 + warp * 2.6) *
+          (1 + warpExpand) *
           (1 + gateFactor * (music.bass * 0.055 + music.beat * 0.075));
         const gcx = w * 0.5 - nx * 26 + focusX * w * 0.5;
         const gcy = h * 0.5 - ny * 18 + focusY * h * 0.5;
@@ -549,7 +551,8 @@ export const CosmicBackground = forwardRef<CosmicBackgroundHandle, CosmicBackgro
         const cosT = Math.cos(tilt);
         const sinT = Math.sin(tilt);
         const camZ = 2.4;
-        const galaxyAlpha = fade * (1 - warp * 0.85) * (1 - dim * 0.35);
+        const warpFade = wstate && !reduced ? 1 - Math.pow(warpProgress, 2) * 0.75 : 1;
+        const galaxyAlpha = fade * warpFade * (1 - dim * 0.35);
         const presenceR = Math.min(w, h) * 0.16;
         const mx = mouse.sx;
         const my = mouse.sy;
@@ -893,6 +896,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
   };
 
   const handlePickKnownTarget = (target: GateKnownTarget) => {
+    playCoordChangeSound();
     setSelectedTargetId(target.id);
     setDropdownOpen(false);
     animateTelemetryFill(target.raHms, target.decDms);
@@ -1125,6 +1129,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
 
           <button
             type="submit"
+            data-sfx="none"
             disabled={warping || loading}
             className="btn-press w-full py-2.5 px-4 rounded-xl bg-[#00D2FF]/20 hover:bg-[#00D2FF]/30 border border-[#00D2FF]/75 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_0_24px_rgba(0,210,255,0.22)] cursor-pointer disabled:opacity-50"
           >
@@ -1192,6 +1197,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                     <button
                       key={item.id}
                       type="button"
+                      data-sfx="none"
                       onClick={() => handlePickKnownTarget(item)}
                       className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
                         active
