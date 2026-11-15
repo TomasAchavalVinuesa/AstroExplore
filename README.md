@@ -1,5 +1,4 @@
-# 🌌 AstroExplore · Infrared Time-Domain Sky Explorer & Planet X Hunter
-
+# 🌌 AstroExplore
 [![NASA Space Apps Challenge 2026](https://img.shields.io/badge/NASA%20Space%20Apps-2026-blue.svg)](https://www.spaceappschallenge.org/2026/find-a-team/ley-de-conservacion-del-mate/?tab=project)
 [![React 19](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Vite 6](https://img.shields.io/badge/Vite-6.2-646cff.svg)](https://vitejs.dev/)
