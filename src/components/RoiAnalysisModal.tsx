@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
+import { ChemicalFormula, Latex } from "./Latex";
 import { formatDectoDMS, formatRAtoHMS } from "../lib/coordinates";
 import { compareRoiReadings } from "../lib/spectralAnalysis";
 import {
@@ -658,7 +659,9 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                           <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-slate-400">
                             {analysis.celestialClassification.estimatedTeffK !== null && (
                               <span>
-                                {isEn ? "Wien T_eff:" : "T_eff Wien:"}{" "}
+                                {isEn ? "Wien " : ""}
+                                <Latex math="T_{\mathrm{eff}}" />
+                                {isEn ? ":" : " Wien:"}{" "}
                                 <strong className="text-amber-300">
                                   ~{analysis.celestialClassification.estimatedTeffK} K
                                 </strong>
@@ -666,7 +669,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                             )}
                             {analysis.celestialClassification.spectralSlope !== null && (
                               <span>
-                                · α_IR:{" "}
+                                · <Latex math="\alpha_{\mathrm{IR}}" />:{" "}
                                 <strong className="text-slate-200">
                                   {analysis.celestialClassification.spectralSlope > 0 ? "+" : ""}
                                   {analysis.celestialClassification.spectralSlope}
@@ -921,7 +924,9 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         <div key={s.id} className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="font-mono font-semibold text-white">{s.formula}</span>
+                              <span className="font-semibold text-white">
+                                <ChemicalFormula formula={s.formula} />
+                              </span>
                               <span className="text-slate-400 truncate">
                                 {isEn ? s.nameEn : s.nameEs}
                               </span>
@@ -930,7 +935,7 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                                   s.status
                                 )}`}
                               >
-                                {s.snr.toFixed(1)}σ
+                                <Latex math={`${s.snr.toFixed(1)}\\sigma`} />
                               </span>
                             </div>
                             <span className="font-mono font-semibold text-emerald-300 shrink-0">
@@ -991,7 +996,9 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                       <thead className="bg-black/40 text-slate-400 font-mono border-b border-white/10">
                         <tr>
                           <th className="px-3 py-2">{isEn ? "Species" : "Especie"}</th>
-                          <th className="px-3 py-2">λ (µm)</th>
+                          <th className="px-3 py-2">
+                            <Latex math="\lambda\;(\mu\mathrm{m})" />
+                          </th>
                           <th className="px-3 py-2">{isEn ? "Type" : "Tipo"}</th>
                           <th className="px-3 py-2">SNR</th>
                           <th className="px-3 py-2">{isEn ? "Samples" : "Muestras"}</th>
@@ -1002,8 +1009,8 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         {analysis.species.map((s) => (
                           <tr key={s.id} className="hover:bg-white/[0.02]">
                             <td className="px-3 py-2">
-                              <span className="font-mono font-semibold text-white mr-1.5">
-                                {s.formula}
+                              <span className="font-semibold text-white mr-1.5">
+                                <ChemicalFormula formula={s.formula} />
                               </span>
                               <span className="text-slate-400">{isEn ? s.nameEn : s.nameEs}</span>
                             </td>
@@ -1020,7 +1027,11 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                                   : "Emisión"}
                             </td>
                             <td className="px-3 py-2 font-mono text-slate-200">
-                              {s.status === "no_coverage" ? "—" : `${s.snr.toFixed(2)}σ`}
+                              {s.status === "no_coverage" ? (
+                                "—"
+                              ) : (
+                                <Latex math={`${s.snr.toFixed(2)}\\sigma`} />
+                              )}
                             </td>
                             <td className="px-3 py-2 font-mono text-slate-400">
                               {s.pointsInBand} ({s.pointsLeftContinuum}/{s.pointsRightContinuum})
@@ -1039,6 +1050,18 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                       </tbody>
                     </table>
                   </div>
+                </div>
+              )}
+
+              {analysis && (
+                <div className="rounded-xl bg-black/40 border border-white/10 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300">
+                  <span className="text-slate-400">
+                    {isEn ? "Spectral & thermal estimators:" : "Estimadores espectral y térmico:"}
+                  </span>
+                  <Latex
+                    math="T_{\mathrm{eff}}\approx\frac{2897.77}{\lambda_{\max}},\quad \mathrm{SNR}=\frac{|F_{\mathrm{band}}-F_{\mathrm{cont}}|}{\sigma_{\mathrm{cont}}}"
+                    className="text-cyan-200"
+                  />
                 </div>
               )}
             </>
@@ -1193,13 +1216,23 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                               {comparison.sharedDetectedFormulas.map((f) => (
                                 <span
                                   key={f}
-                                  className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/35 font-mono text-emerald-200"
+                                  className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/35 text-emerald-200"
                                 >
-                                  {f}
+                                  <ChemicalFormula formula={f} />
                                 </span>
                               ))}
                             </div>
                           )}
+
+                          <div className="rounded-xl bg-black/40 border border-white/10 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300">
+                            <span className="text-slate-400">
+                              {isEn ? "Similarity metric:" : "Métrica de similitud:"}
+                            </span>
+                            <Latex
+                              math="S_{\cos}(\mathbf{A},\mathbf{B}) = \frac{\mathbf{A}\cdot\mathbf{B}}{\|\mathbf{A}\|\,\|\mathbf{B}\|}\times 100\%"
+                              className="text-emerald-200"
+                            />
+                          </div>
                         </>
                       )}
 
@@ -1457,9 +1490,9 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                           {identityCheck.sharedDetectedFormulas.map((f) => (
                             <span
                               key={f}
-                              className="px-2 py-0.5 rounded-full bg-black/40 border border-white/15 font-mono text-emerald-200"
+                              className="px-2 py-0.5 rounded-full bg-black/40 border border-white/15 text-emerald-200"
                             >
-                              {f}
+                              <ChemicalFormula formula={f} />
                             </span>
                           ))}
                         </div>
@@ -1544,6 +1577,27 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                         </div>
                       </div>
 
+                      {/* Kinematic model formula in LaTeX */}
+                      <div className="rounded-xl bg-black/40 border border-white/10 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300">
+                        <span className="text-slate-400">
+                          {trajectoryModel === "quadratic"
+                            ? isEn
+                              ? "Quadratic astrometric model:"
+                              : "Modelo astrométrico cuadrático:"
+                            : isEn
+                              ? "Linear proper-motion model:"
+                              : "Modelo lineal de movimiento propio:"}
+                        </span>
+                        <Latex
+                          math={
+                            trajectoryModel === "quadratic"
+                              ? "\\xi(t)=\\xi_0+\\mu_{\\alpha*}\\Delta t+\\tfrac{1}{2}a_\\xi\\Delta t^2,\\;\\eta(t)=\\eta_0+\\mu_\\delta\\Delta t+\\tfrac{1}{2}a_\\eta\\Delta t^2"
+                              : "\\xi(t)=\\xi_0+\\mu_{\\alpha*}\\Delta t,\\;\\eta(t)=\\eta_0+\\mu_\\delta\\Delta t"
+                          }
+                          className="text-amber-200"
+                        />
+                      </div>
+
                       {/* Observed segments breakdown when 3+ areas are selected */}
                       {trajectoryResult.segments.length >= 2 && (
                         <div className="rounded-xl bg-black/35 border border-white/10 p-2.5 space-y-1.5">
@@ -1622,8 +1676,19 @@ export const RoiAnalysisModal: React.FC<RoiAnalysisModalProps> = ({
                               {formatDectoDMS(extrapolatedPosition.dec)}
                             </div>
                             <div className="text-[11px] font-mono text-slate-300">
-                              ± {extrapolatedPosition.uncertaintyArcsec.toFixed(2)}″ (1σ) ·{" "}
-                              {isEn ? "Δ from last:" : "Δ desde última:"}{" "}
+                              <Latex
+                                math={`\\pm\\,${extrapolatedPosition.uncertaintyArcsec.toFixed(2)}''\\;(1\\sigma)`}
+                              />{" "}
+                              ·{" "}
+                              {isEn ? (
+                                <>
+                                  <Latex math="\Delta" /> from last:
+                                </>
+                              ) : (
+                                <>
+                                  <Latex math="\Delta" /> desde última:
+                                </>
+                              )}{" "}
                               {extrapolatedPosition.displacementFromLastArcsec.toFixed(2)}″ (
                               {extrapolatedPosition.deltaDaysFromLast >= 0 ? "+" : ""}
                               {extrapolatedPosition.deltaDaysFromLast.toFixed(0)} d)

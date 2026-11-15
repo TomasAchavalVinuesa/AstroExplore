@@ -114,6 +114,9 @@ export interface Translations {
     viewModeSplit: string;
     visualZoomLabel: (zoom: string) => string;
     visualZoomReset: string;
+    asteroidGameScore: (score: number) => string;
+    asteroidGameHint: string;
+    asteroidGameAria: string;
   };
   skyMap: {
     title: string;
@@ -410,6 +413,9 @@ export const translations: Record<Language, Translations> = {
       viewModeSplit: "Vista Dividida (Mapa + FITS)",
       visualZoomLabel: (zoom) => `Zoom ${zoom}x`,
       visualZoomReset: "Restablecer zoom visual (1x)",
+      asteroidGameScore: (score) => `Score: ${score}`,
+      asteroidGameHint: "¡Haz clic en los asteroides para destruirlos mientras carga!",
+      asteroidGameAria: "Minijuego de asteroides durante la carga",
     },
     skyMap: {
       title: "Mapa Celeste Interactivo SPHEREx (HiPS All-Sky Cube & MOC)",
@@ -819,6 +825,9 @@ export const translations: Record<Language, Translations> = {
       viewModeSplit: "Split View (Map + FITS)",
       visualZoomLabel: (zoom) => `Zoom ${zoom}x`,
       visualZoomReset: "Reset visual zoom (1x)",
+      asteroidGameScore: (score) => `Score: ${score}`,
+      asteroidGameHint: "Click the asteroids to destroy them while loading!",
+      asteroidGameAria: "Asteroid mini-game while loading",
     },
     skyMap: {
       title: "SPHEREx Interactive Sky Map (HiPS All-Sky Cube & MOC)",

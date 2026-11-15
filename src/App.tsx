@@ -15,6 +15,8 @@ import {
   DEFAULT_CUTOUT_FOV_DEG,
   MAX_CUTOUT_FOV_DEG,
   clampCutoutFov,
+  formatDectoDMS,
+  formatRAtoHMS,
   parseDec,
   parseRA,
 } from "./lib/coordinates";
@@ -395,8 +397,8 @@ export default function App() {
         loading: true,
         statusState: {
           type: "queryingSia",
-          ra: raDeg.toFixed(5),
-          dec: decDeg.toFixed(5),
+          ra: formatRAtoHMS(raDeg),
+          dec: formatDectoDMS(decDeg),
           collection: colMode,
         },
       }));
@@ -425,8 +427,8 @@ export default function App() {
                 statusState: {
                   type: "noImagesFound",
                   collection: "SPHEREx DR1 Wide (spherex_dr1)",
-                  ra: raDeg.toFixed(4),
-                  dec: decDeg.toFixed(4),
+                  ra: formatRAtoHMS(raDeg),
+                  dec: formatDectoDMS(decDeg),
                 },
               }
             : {}),
@@ -853,8 +855,14 @@ export default function App() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setActivePresetId(null);
+    const raDeg = parseRA(raInput);
+    const decDeg = parseDec(decInput);
+    const label =
+      raDeg !== null && decDeg !== null
+        ? `${formatRAtoHMS(raDeg)} · ${formatDectoDMS(decDeg)}`
+        : `${raInput}, ${decInput}`;
     const tabId = openOrReuseMap2Tab({
-      label: `${raInput}, ${decInput}`,
+      label,
       raInput,
       decInput,
       targetName: t.chrono.customSkyPatch,
@@ -866,8 +874,14 @@ export default function App() {
   const handleSubmitCoords = useCallback(
     (raStr: string, decStr: string) => {
       setActivePresetId(null);
+      const raDeg = parseRA(raStr);
+      const decDeg = parseDec(decStr);
+      const label =
+        raDeg !== null && decDeg !== null
+          ? `${formatRAtoHMS(raDeg)} · ${formatDectoDMS(decDeg)}`
+          : `${raStr}, ${decStr}`;
       const tabId = openOrReuseMap2Tab({
-        label: `${raStr}, ${decStr}`,
+        label,
         raInput: raStr,
         decInput: decStr,
         targetName: t.chrono.customSkyPatch,
@@ -1028,13 +1042,13 @@ export default function App() {
 
   const handleQueryAtCoords = useCallback(
     (raDeg: number, decDeg: number) => {
-      const raStr = raDeg.toFixed(5);
-      const decStr = decDeg.toFixed(5);
+      const raStr = formatRAtoHMS(raDeg);
+      const decStr = formatDectoDMS(decDeg);
       setActivePresetId(null);
       setRaInput(raStr);
       setDecInput(decStr);
       const tabId = openOrReuseMap2Tab({
-        label: `${raDeg.toFixed(2)}°, ${decDeg.toFixed(2)}°`,
+        label: `${raStr} · ${decStr}`,
         raInput: raStr,
         decInput: decStr,
         targetName: t.chrono.customSkyPatch,

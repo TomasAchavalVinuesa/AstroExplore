@@ -23,6 +23,7 @@ import {
 } from "../lib/coordinates";
 import { useLanguage } from "../i18n/LanguageContext";
 import { CursorAudioEngine } from "../lib/cursorAudio";
+import { CoordinateFormatToggle } from "./CoordinateFormatToggle";
 import type {
   CollectionQueryMode,
   ResolvedCelestialObject,
@@ -943,12 +944,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
 
       {/* CONTENEDOR CENTRAL CON LOS 3 BLOQUES */}
       <div className="relative z-10 w-full max-w-[540px] flex flex-col gap-3.5 my-auto">
-        <div className="text-center mb-1">
-          <h1 className="text-3xl sm:text-4xl font-bold tracking-[-0.025em] text-white">
-            {t.chrono.entryTitle}
-          </h1>
-        </div>
-
         {/* TARJETA HERO — Free Navigation */}
         <div
           id="hero-start-card"
@@ -1026,43 +1021,12 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
               </h3>
             </div>
 
-            <div
-              role="group"
-              aria-label={isEn ? "Coordinate format" : "Formato de coordenadas"}
-              title={
-                isEn
-                  ? "Switch between sexagesimal (HMS/DMS) and decimal degrees (DEG)"
-                  : "Cambiar entre sexagesimal (HMS/DMS) y grados decimales (DEG)"
-              }
-              className="inline-flex items-center p-0.5 rounded-xl bg-black/55 border border-white/12 shrink-0"
-            >
-              <button
-                type="button"
-                onClick={() => handleSetCoordinateFormat("hms")}
-                disabled={!coordsValid}
-                aria-pressed={!isCurrentlyDecimal}
-                className={`px-2 py-0.5 rounded-[9px] text-[10px] font-mono transition-all cursor-pointer disabled:opacity-40 ${
-                  !isCurrentlyDecimal
-                    ? "bg-[#00D2FF]/20 text-[#00D2FF] border border-[#00D2FF]/55 font-semibold shadow-[0_0_10px_rgba(0,210,255,0.22)]"
-                    : "text-slate-400 hover:text-slate-200 border border-transparent"
-                }`}
-              >
-                HMS/DMS
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSetCoordinateFormat("deg")}
-                disabled={!coordsValid}
-                aria-pressed={isCurrentlyDecimal}
-                className={`px-2 py-0.5 rounded-[9px] text-[10px] font-mono transition-all cursor-pointer disabled:opacity-40 ${
-                  isCurrentlyDecimal
-                    ? "bg-[#00D2FF]/20 text-[#00D2FF] border border-[#00D2FF]/55 font-semibold shadow-[0_0_10px_rgba(0,210,255,0.22)]"
-                    : "text-slate-400 hover:text-slate-200 border border-transparent"
-                }`}
-              >
-                DEG
-              </button>
-            </div>
+            <CoordinateFormatToggle
+              isDecimal={isCurrentlyDecimal}
+              disabled={!coordsValid}
+              isEn={isEn}
+              onChange={handleSetCoordinateFormat}
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -1095,11 +1059,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                       : "border-amber-400/60 focus:border-amber-400"
                 }`}
               />
-              {raDeg === null && (
-                <div className="text-[10px] font-mono text-amber-300/90 px-0.5">
-                  {isEn ? "Invalid RA format" : "Formato RA inválido"}
-                </div>
-              )}
             </div>
 
             <div className="space-y-1">
@@ -1131,11 +1090,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                       : "border-amber-400/60 focus:border-amber-400"
                 }`}
               />
-              {decDeg === null && (
-                <div className="text-[10px] font-mono text-amber-300/90 px-0.5">
-                  {isEn ? "Invalid Dec format" : "Formato Dec inválido"}
-                </div>
-              )}
             </div>
           </div>
 
@@ -1159,8 +1113,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
             <span>{isEn ? "Search" : "Buscar"}</span>
             {coordsValid && (
               <span className="font-mono text-[11px] text-[#00D2FF] ml-1">
-                ({raDeg.toFixed(2)}°, {decDeg >= 0 ? "+" : ""}
-                {decDeg.toFixed(2)}°)
+                ({formatRAtoHMS(raDeg)}, {formatDectoDMS(decDeg)})
               </span>
             )}
           </button>
@@ -1199,9 +1152,6 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                     — {isEn ? activeKnownTarget.subtitleEn : activeKnownTarget.subtitleEs}
                   </span>
                 </div>
-                <span className="font-mono text-[11px] text-[#00D2FF] shrink-0 ml-2">
-                  ({activeKnownTarget.shortCoords})
-                </span>
               </div>
               <ChevronDown
                 className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
@@ -1211,7 +1161,7 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
             </button>
 
             {dropdownOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[172px] overflow-y-auto rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] divide-y divide-white/10">
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[122px] overflow-y-auto rounded-2xl bg-[#0B101B]/95 backdrop-blur-2xl border border-[#00D2FF]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85)] divide-y divide-white/10">
                 {GATE_KNOWN_TARGETS.map((item) => {
                   const active = selectedTargetId === item.id;
                   return (
@@ -1225,18 +1175,13 @@ export const SpaceGate: React.FC<SpaceGateProps> = ({
                           : "hover:bg-white/[0.06] text-slate-200"
                       }`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs sm:text-[13px] font-semibold text-white">
-                            {item.label}
-                          </span>
-                          <span className="font-mono text-[11px] text-[#00D2FF]">
-                            ({item.shortCoords})
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 truncate">
-                          {isEn ? item.subtitleEn : item.subtitleEs}
-                        </p>
+                      <div className="flex items-center gap-2 min-w-0 leading-5">
+                        <span className="text-xs sm:text-[13px] font-semibold text-white shrink-0">
+                          {item.label}
+                        </span>
+                        <span className="text-[11px] text-slate-400 truncate">
+                          — {isEn ? item.subtitleEn : item.subtitleEs}
+                        </span>
                       </div>
                       <span className="text-[10px] font-mono text-slate-400 shrink-0">
                         {active ? "✓" : "→"}

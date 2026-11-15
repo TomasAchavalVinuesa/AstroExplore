@@ -687,3 +687,15 @@ input[type="range"].apple-slider::-moz-range-thumb:active {
   border-color: #34d399;
   color: #34d399;
 }
+
+/* KaTeX inline & block integration */
+.katex-inline .katex {
+  font-size: 1.04em;
+  line-height: 1.1;
+}
+.katex-block .katex-display {
+  margin: 0.25rem 0;
+}
+.katex-block .katex {
+  font-size: 0.98em;
+}

@@ -70,6 +70,7 @@ import { DetectorGuide } from "./DetectorGuide";
 import { SpectralProfile } from "./SpectralProfile";
 import { BlinkComparator } from "./BlinkComparator";
 import { RoiAnalysisModal } from "./RoiAnalysisModal";
+import { AsteroidLoadingGame } from "./AsteroidLoadingGame";
 
 interface ViewerPanelProps {
   map2Tabs: Map2TabSession[];
@@ -314,6 +315,7 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
 
 
   const cutoutViewportRef = useRef<HTMLDivElement | null>(null);
+  const loadingCardRef = useRef<HTMLDivElement | null>(null);
 
   const observations = useMemo(
     () => versions?.[activeCollection]?.observations ?? [],
@@ -630,6 +632,15 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
     cutout,
   ]);
 
+  const isApiDownOrError = map2ApiDown || Boolean(status?.isError);
+  const isMap2LoadingImages =
+    secondMapOpen &&
+    secondMapTab === "cutout" &&
+    !isWaitingForSelectedDates &&
+    !displayCutout &&
+    !isApiDownOrError &&
+    (loading || cutoutLoading || isPreloadingAll);
+
   // Smooth crossfade tracking for Map 2
   useEffect(() => {
     if (
@@ -644,24 +655,50 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
     }
   }, [displayCutout?.dataUrl]);
 
+  const playbackStateRef = useRef({
+    activeEpochIdx,
+    readyPlaybackFrames,
+    epochFramesLength: epochFrames.length,
+    activeCollection,
+    isLooping,
+    onSelectVersionObservation,
+  });
+  playbackStateRef.current = {
+    activeEpochIdx,
+    readyPlaybackFrames,
+    epochFramesLength: epochFrames.length,
+    activeCollection,
+    isLooping,
+    onSelectVersionObservation,
+  };
+
   // Automatic epoch playback interval (only advances once all selected frames are cached)
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying || !isActive || !secondMapOpen || secondMapTab !== "cutout") return;
     if (epochFrames.length > 0 && (!allPlaybackFramesSettled || readyPlaybackFrames.length <= 1)) {
       return;
     }
     const intervalMs = Math.max(250, Math.round(950 / speedMultiplier));
     const timer = window.setInterval(() => {
-      if (readyPlaybackFrames.length > 1) {
-        const nextIdx = (activeEpochIdx + 1) % readyPlaybackFrames.length;
-        onSelectVersionObservation(activeCollection, readyPlaybackFrames[nextIdx]);
-        if (!isLooping && nextIdx === 0) {
+      const {
+        activeEpochIdx: curIdx,
+        readyPlaybackFrames: frames,
+        epochFramesLength,
+        activeCollection: col,
+        isLooping: looping,
+        onSelectVersionObservation: selectObs,
+      } = playbackStateRef.current;
+
+      if (frames.length > 1) {
+        const nextIdx = (curIdx + 1) % frames.length;
+        selectObs(col, frames[nextIdx]);
+        if (!looping && nextIdx === 0) {
           setIsPlaying(false);
         }
-      } else if (epochFrames.length === 0) {
-        const nextIdx = (activeEpochIdx + 1) % FALLBACK_EPOCHS.length;
+      } else if (epochFramesLength === 0) {
+        const nextIdx = (curIdx + 1) % FALLBACK_EPOCHS.length;
         setFallbackEpochIdx(nextIdx);
-        if (!isLooping && nextIdx === 0) {
+        if (!looping && nextIdx === 0) {
           setIsPlaying(false);
         }
       }
@@ -670,14 +707,13 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
     return () => window.clearInterval(timer);
   }, [
     isPlaying,
-    isLooping,
+    isActive,
+    secondMapOpen,
+    secondMapTab,
     speedMultiplier,
     epochFrames.length,
-    readyPlaybackFrames,
+    readyPlaybackFrames.length,
     allPlaybackFramesSettled,
-    activeEpochIdx,
-    activeCollection,
-    onSelectVersionObservation,
   ]);
 
   const currentFov = clampCutoutFov(lastCoords?.size ?? DEFAULT_CUTOUT_FOV_DEG);
@@ -1542,6 +1578,8 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
             {/* Map 2 Content Body */}
             {secondMapTab === "cutout" ? (
               <div className="flex-1 w-full h-full flex items-center justify-center pl-14 pr-5 pt-16 pb-16 relative">
+                {isMap2LoadingImages && <AsteroidLoadingGame obstacleRef={loadingCardRef} />}
+
                 {isWaitingForSelectedDates ? (
                   <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
                     <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center">
@@ -1552,7 +1590,10 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                     </p>
                   </div>
                 ) : isPreloadingAll ? (
-                  <div className="flex flex-col items-center justify-center gap-2.5 text-slate-300 px-4 text-center">
+                  <div
+                    ref={loadingCardRef}
+                    className="relative z-20 glass-panel rounded-2xl border border-[#00D2FF]/35 bg-slate-950/90 backdrop-blur-md shadow-2xl px-6 py-4 flex flex-col items-center justify-center gap-2.5 text-slate-300 text-center"
+                  >
                     <Loader2 className="w-7 h-7 animate-spin text-[#00D2FF]" />
                     <span className="text-xs font-medium text-slate-200">
                       {t.chrono.preloadingFrames(settledPlaybackCount, playbackFrames.length)}
@@ -2035,7 +2076,10 @@ const Map2TabPanel: React.FC<Map2TabPanelProps> = ({
                     )}
                   </div>
                 ) : loading || cutoutLoading ? (
-                  <div className="flex flex-col items-center justify-center gap-2.5 p-6 text-center text-slate-300">
+                  <div
+                    ref={loadingCardRef}
+                    className="relative z-20 glass-panel rounded-2xl border border-[#00D2FF]/35 bg-slate-950/90 backdrop-blur-md shadow-2xl px-6 py-5 flex flex-col items-center justify-center gap-2.5 text-center text-slate-300"
+                  >
                     <Loader2 className="w-7 h-7 animate-spin text-[#00D2FF]" />
                     <p className="text-xs font-medium text-slate-200">
                       {loading
