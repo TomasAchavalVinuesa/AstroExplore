@@ -1,5 +1,13 @@
 import type { FitsWcs } from "./types";
 
+export const MIN_CUTOUT_FOV_DEG = 0.02;
+export const MAX_CUTOUT_FOV_DEG = 1.0;
+export const DEFAULT_CUTOUT_FOV_DEG = MAX_CUTOUT_FOV_DEG;
+
+export function clampCutoutFov(sizeDeg: number): number {
+  return Number(Math.min(MAX_CUTOUT_FOV_DEG, Math.max(MIN_CUTOUT_FOV_DEG, sizeDeg)).toFixed(3));
+}
+
 /**
  * Parsea Ascensión Recta en grados decimales (ej. "133.795129")
  * o en formato sexagesimal HMS (ej. "08h55m10.831s", "08:55:10.831", "08 55 10.831").
@@ -153,6 +161,70 @@ export function pixelToWorld(
   const decDeg = decRad * rad2deg;
 
   return { ra: raDeg, dec: decDeg };
+}
+
+/**
+ * Convierte coordenadas celestes ICRS (RA, Dec en grados) a coordenadas de píxel FITS
+ * (1-indexadas, origen abajo-izquierda) usando proyección gnomónica inversa (TAN).
+ */
+export function worldToPixel(
+  ra: number,
+  dec: number,
+  wcs: FitsWcs
+): { px: number; py: number } | null {
+  const deg2rad = Math.PI / 180;
+  const rad2deg = 180 / Math.PI;
+
+  const raRad = ra * deg2rad;
+  const decRad = dec * deg2rad;
+  const ra0 = wcs.crval1 * deg2rad;
+  const dec0 = wcs.crval2 * deg2rad;
+  const dRa = raRad - ra0;
+
+  const sinDec = Math.sin(decRad);
+  const cosDec = Math.cos(decRad);
+  const sinDec0 = Math.sin(dec0);
+  const cosDec0 = Math.cos(dec0);
+  const cosDRa = Math.cos(dRa);
+
+  const cosC = sinDec0 * sinDec + cosDec0 * cosDec * cosDRa;
+  if (cosC <= 1e-9) return null;
+
+  const xiDeg = ((cosDec * Math.sin(dRa)) / cosC) * rad2deg;
+  const etaDeg = ((cosDec0 * sinDec - sinDec0 * cosDec * cosDRa) / cosC) * rad2deg;
+
+  const det = wcs.cd1_1 * wcs.cd2_2 - wcs.cd1_2 * wcs.cd2_1;
+  if (Math.abs(det) < 1e-18) return null;
+
+  const dx = (wcs.cd2_2 * xiDeg - wcs.cd1_2 * etaDeg) / det;
+  const dy = (-wcs.cd2_1 * xiDeg + wcs.cd1_1 * etaDeg) / det;
+
+  return {
+    px: wcs.crpix1 + dx,
+    py: wcs.crpix2 + dy,
+  };
+}
+
+/**
+ * Devuelve la posición normalizada [0..1, 0..1] (origen arriba-izquierda de la imagen)
+ * de un objetivo celeste dentro de un recorte FITS renderizado.
+ */
+export function getTargetImageFraction(
+  width: number,
+  height: number,
+  wcs: FitsWcs | null,
+  target: { ra: number; dec: number } | null
+): { xFrac: number; yFrac: number } | null {
+  if (width <= 0 || height <= 0) return null;
+  if (!wcs || !target) return { xFrac: 0.5, yFrac: 0.5 };
+
+  const pix = worldToPixel(target.ra, target.dec, wcs);
+  if (!pix) return { xFrac: 0.5, yFrac: 0.5 };
+
+  return {
+    xFrac: (pix.px - 0.5) / width,
+    yFrac: 1 - (pix.py - 0.5) / height,
+  };
 }
 
 function generateNiceTicks(

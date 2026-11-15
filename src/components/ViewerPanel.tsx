@@ -10,7 +10,10 @@ import {
   Image as ImageIcon,
   Info,
   Loader2,
+  Maximize2,
+  Minus,
   Play,
+  Plus,
   RotateCcw,
   Sparkles,
   X,
@@ -26,7 +29,14 @@ import type {
   SpherexObservation,
   StretchMode,
 } from "../lib/types";
-import { computeAxisTicks } from "../lib/coordinates";
+import {
+  DEFAULT_CUTOUT_FOV_DEG,
+  MAX_CUTOUT_FOV_DEG,
+  MIN_CUTOUT_FOV_DEG,
+  clampCutoutFov,
+  computeAxisTicks,
+  getTargetImageFraction,
+} from "../lib/coordinates";
 import { getRenderedCutout } from "../lib/irsa";
 import { useLanguage } from "../i18n/LanguageContext";
 import { HipsSkyMapPanel } from "./HipsSkyMapPanel";
@@ -262,6 +272,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
   // Clear rendered frame cache when coordinates or visual parameters change
   useEffect(() => {
     setEpochCutouts({});
+    setBandCutouts({});
   }, [renderSignature]);
 
   // Preload and cache all selected playback frames before showing the first image
@@ -480,7 +491,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     const controller = new AbortController();
 
     for (const obs of bandRepresentatives) {
-      const key = `${obs.bandpass}|${obs.obs_id}`;
+      const key = `${renderSignature}|${obs.bandpass}|${obs.obs_id}`;
       setBandCutouts((prev) =>
         prev[key]?.status === "ready" ? prev : { ...prev, [key]: { status: "loading" } }
       );
@@ -517,6 +528,7 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     secondMapOpen,
     secondMapTab,
     bandRepresentatives,
+    renderSignature,
     lastCoords,
     stretch,
     colormap,
@@ -528,7 +540,22 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
     return computeAxisTicks(displayCutout.width, displayCutout.height, displayCutout.wcs, lastCoords);
   }, [displayCutout, lastCoords]);
 
-  const currentFov = lastCoords?.size ?? 0.12;
+  const targetFraction = useMemo(() => {
+    if (!displayCutout) return null;
+    return getTargetImageFraction(
+      displayCutout.width,
+      displayCutout.height,
+      displayCutout.wcs,
+      lastCoords
+    );
+  }, [displayCutout, lastCoords]);
+
+  const currentFov = lastCoords?.size ?? DEFAULT_CUTOUT_FOV_DEG;
+
+  const handleStepFov = (direction: "in" | "out") => {
+    const next = direction === "in" ? currentFov * 0.7 : currentFov / 0.7;
+    onChangeFov(clampCutoutFov(next));
+  };
 
   const handleDownloadPng = () => {
     if (!displayCutout) return;
@@ -755,6 +782,44 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
 
             {/* Top-Right Map 2 Controls & Close Button */}
             <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 flex-wrap justify-end">
+              {/* Map 2 Field of View (FOV) Controls */}
+              <div className="glass-panel rounded-full px-2 py-1 flex items-center gap-1 text-[11px] text-slate-300">
+                <button
+                  type="button"
+                  onClick={() => handleStepFov("out")}
+                  disabled={currentFov >= MAX_CUTOUT_FOV_DEG}
+                  className="p-0.5 hover:text-white disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                  title={t.viewer.map2FovOutTitle}
+                  aria-label={t.viewer.map2FovOutTitle}
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="font-mono text-[10px] text-[#00D2FF] px-1 whitespace-nowrap">
+                  FOV {currentFov.toFixed(2)}°
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleStepFov("in")}
+                  disabled={currentFov <= MIN_CUTOUT_FOV_DEG}
+                  className="p-0.5 hover:text-white disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                  title={t.viewer.map2FovInTitle}
+                  aria-label={t.viewer.map2FovInTitle}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                {currentFov < MAX_CUTOUT_FOV_DEG && (
+                  <button
+                    type="button"
+                    onClick={() => onChangeFov(MAX_CUTOUT_FOV_DEG)}
+                    className="p-0.5 hover:text-white border-l border-white/10 pl-1 cursor-pointer"
+                    title={t.viewer.map2FovMaxTitle}
+                    aria-label={t.viewer.map2FovMaxTitle}
+                  >
+                    <Maximize2 className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
               {/* Switch between Cutout+WCS and 6-Bands Grid inside Map 2 */}
               <div className="glass-panel rounded-full p-1 flex items-center gap-1 text-[11px]">
                 <button
@@ -846,16 +911,24 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                         }}
                         className="relative w-full h-full object-fill block [image-rendering:pixelated] transition-transform duration-150"
                       />
-                    </div>
 
-                    {/* Central Reticle */}
-                    {showCrosshair && (
-                      <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                        <div className="w-8 h-8 rounded-full border border-[#00D2FF]/80 shadow-[0_0_10px_rgba(0,210,255,0.6)]" />
-                        <div className="absolute w-14 h-[1px] bg-[#00D2FF]/80" />
-                        <div className="absolute h-14 w-[1px] bg-[#00D2FF]/80" />
-                      </div>
-                    )}
+                      {/* Target Coordinate Reticle */}
+                      {showCrosshair && targetFraction && (
+                        <div
+                          className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 transition-all duration-150"
+                          style={{
+                            left: `${(0.5 + (targetFraction.xFrac - 0.5) * cutoutZoom) * 100}%`,
+                            top: `${(0.5 + (targetFraction.yFrac - 0.5) * cutoutZoom) * 100}%`,
+                          }}
+                        >
+                          <div className="relative flex items-center justify-center">
+                            <div className="w-8 h-8 rounded-full border border-[#00D2FF]/90 shadow-[0_0_10px_rgba(0,210,255,0.65)]" />
+                            <div className="absolute w-14 h-[1px] bg-[#00D2FF]/90" />
+                            <div className="absolute h-14 w-[1px] bg-[#00D2FF]/90" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Left Y-Axis (Declination) */}
                     {axisTicks && (
@@ -1009,9 +1082,18 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
               /* Map 2 Tab: 6 Spectral Bands (D1 - D6) Grid */
               <div className="flex-1 w-full h-full pt-16 pb-4 px-4 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-2.5 items-start">
                 {bandRepresentatives.map((obs) => {
-                  const key = `${obs.bandpass}|${obs.obs_id}`;
+                  const key = `${renderSignature}|${obs.bandpass}|${obs.obs_id}`;
                   const entry = bandCutouts[key];
                   const isCurrent = isSameObs(selectedObs, obs);
+                  const bandTarget =
+                    entry?.status === "ready" && entry.cutout
+                      ? getTargetImageFraction(
+                          entry.cutout.width,
+                          entry.cutout.height,
+                          entry.cutout.wcs,
+                          lastCoords
+                        )
+                      : null;
                   return (
                     <button
                       key={key}
@@ -1028,11 +1110,36 @@ export const ViewerPanel: React.FC<ViewerPanelProps> = ({
                     >
                       <div className="relative w-full aspect-square bg-black flex items-center justify-center overflow-hidden">
                         {entry?.status === "ready" && entry.cutout ? (
-                          <img
-                            src={entry.cutout.dataUrl}
-                            alt={obs.bandpass}
-                            className="w-full h-full object-contain [image-rendering:pixelated]"
-                          />
+                          <div
+                            className="relative max-w-full max-h-full"
+                            style={{
+                              aspectRatio: `${entry.cutout.width} / ${entry.cutout.height}`,
+                              ...(entry.cutout.width >= entry.cutout.height
+                                ? { width: "100%" }
+                                : { height: "100%" }),
+                            }}
+                          >
+                            <img
+                              src={entry.cutout.dataUrl}
+                              alt={obs.bandpass}
+                              className="w-full h-full object-fill block [image-rendering:pixelated]"
+                            />
+                            {showCrosshair && bandTarget && (
+                              <div
+                                className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                                style={{
+                                  left: `${bandTarget.xFrac * 100}%`,
+                                  top: `${bandTarget.yFrac * 100}%`,
+                                }}
+                              >
+                                <div className="relative flex items-center justify-center">
+                                  <div className="w-5 h-5 rounded-full border border-[#00D2FF]/90 shadow-[0_0_8px_rgba(0,210,255,0.7)]" />
+                                  <div className="absolute w-8 h-[1px] bg-[#00D2FF]/90" />
+                                  <div className="absolute h-8 w-[1px] bg-[#00D2FF]/90" />
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         ) : entry?.status === "error" ? (
                           <span className="text-[10px] text-rose-400 px-2 text-center">
                             {t.epochPlayer.errorFrame}

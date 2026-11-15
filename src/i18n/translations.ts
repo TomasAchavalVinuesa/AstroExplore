@@ -78,6 +78,9 @@ export interface Translations {
     fovInTitle: string;
     fovOutTitle: string;
     fovResetTitle: string;
+    map2FovInTitle: string;
+    map2FovOutTitle: string;
+    map2FovMaxTitle: string;
     fovUpdating: string;
     raAxisLabel: string;
     decAxisLabel: string;
@@ -351,9 +354,12 @@ export const translations: Record<Language, Translations> = {
       zoomInTitle: "Acercar zoom",
       zoomOutTitle: "Alejar zoom",
       resetZoomTitle: "Restablecer zoom a 100%",
-      fovInTitle: "Reducir campo de visión (acercar en DR1 Wide)",
-      fovOutTitle: "Aumentar campo de visión (alejar en DR1 Wide)",
+      fovInTitle: "Acercar",
+      fovOutTitle: "Alejar",
       fovResetTitle: "Restablecer campo de visión (0.15°)",
+      map2FovInTitle: "Acercar",
+      map2FovOutTitle: "Alejar",
+      map2FovMaxTitle: "Ampliar campo de visión al máximo (1.00°)",
       fovUpdating: "Actualizando FOV...",
       raAxisLabel: "RA (ICRS)",
       decAxisLabel: "Dec (ICRS)",
@@ -741,9 +747,12 @@ export const translations: Record<Language, Translations> = {
       zoomInTitle: "Zoom in",
       zoomOutTitle: "Zoom out",
       resetZoomTitle: "Reset zoom to 100%",
-      fovInTitle: "Reduce field of view (zoom in on DR1 Wide)",
-      fovOutTitle: "Increase field of view (zoom out on DR1 Wide)",
+      fovInTitle: "Zoom in",
+      fovOutTitle: "Zoom out",
       fovResetTitle: "Reset field of view (0.15°)",
+      map2FovInTitle: "Zoom in",
+      map2FovOutTitle: "Zoom out",
+      map2FovMaxTitle: "Maximize field of view (1.00°)",
       fovUpdating: "Updating FOV...",
       raAxisLabel: "RA (ICRS)",
       decAxisLabel: "Dec (ICRS)",

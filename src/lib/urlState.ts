@@ -1,4 +1,4 @@
-import { parseDec, parseRA } from "./coordinates";
+import { clampCutoutFov, parseDec, parseRA } from "./coordinates";
 import type { CollectionQueryMode, ColormapName, StretchMode } from "./types";
 
 const VALID_COLLECTIONS = new Set<CollectionQueryMode>(["spherex_dr1"]);
@@ -49,8 +49,7 @@ function parseDisplayOptions(params: URLSearchParams): UrlDisplayOptions {
   if (rawSize) {
     const sizeNum = Number(rawSize);
     if (Number.isFinite(sizeNum) && sizeNum > 0) {
-      const clamped = Number(Math.min(1.0, Math.max(0.02, sizeNum)).toFixed(3));
-      options.size = String(clamped);
+      options.size = String(clampCutoutFov(sizeNum));
     }
   }
 

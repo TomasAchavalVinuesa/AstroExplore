@@ -16,7 +16,13 @@ import type {
   StretchMode,
   TargetPreset,
 } from "../lib/types";
-import { parseDec, parseRA } from "../lib/coordinates";
+import {
+  DEFAULT_CUTOUT_FOV_DEG,
+  MAX_CUTOUT_FOV_DEG,
+  MIN_CUTOUT_FOV_DEG,
+  parseDec,
+  parseRA,
+} from "../lib/coordinates";
 import { useLanguage } from "../i18n/LanguageContext";
 import { ShareButton } from "./ShareButton";
 
@@ -202,7 +208,10 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     }
   };
 
-  const numericSize = Math.min(0.5, Math.max(0.05, Number(size) || 0.12));
+  const numericSize = Math.min(
+    MAX_CUTOUT_FOV_DEG,
+    Math.max(MIN_CUTOUT_FOV_DEG, Number(size) || DEFAULT_CUTOUT_FOV_DEG)
+  );
 
   return (
     <aside className="glass-panel rounded-[22px] w-full lg:w-[310px] h-full shrink-0 p-5 flex flex-col justify-between gap-4 overflow-y-auto max-h-full">
@@ -325,8 +334,8 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
           <input
             id="zoom-slider"
             type="range"
-            min="0.05"
-            max="0.50"
+            min={MIN_CUTOUT_FOV_DEG}
+            max={MAX_CUTOUT_FOV_DEG}
             step="0.01"
             value={numericSize}
             onChange={(e) => {

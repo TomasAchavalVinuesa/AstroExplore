@@ -12,7 +12,12 @@ import {
   type CosmicBackgroundHandle,
 } from "./components/SpaceGate";
 import { ViewerPanel } from "./components/ViewerPanel";
-import { parseDec, parseRA } from "./lib/coordinates";
+import {
+  DEFAULT_CUTOUT_FOV_DEG,
+  clampCutoutFov,
+  parseDec,
+  parseRA,
+} from "./lib/coordinates";
 import { resolveCelestialName } from "./lib/celestialResolver";
 import { SPHEREX_HIPS_WAVELENGTHS_UM } from "./lib/hips";
 import { getRenderedCutout, prefetchFitsCutout, queryAllSpherexVersions } from "./lib/irsa";
@@ -81,7 +86,7 @@ export default function App() {
   const [collectionMode, setCollectionMode] = useState<CollectionQueryMode>("spherex_dr1");
   const [band, setBand] = useState("all");
   const [radius, setRadius] = useState("0.05");
-  const [size, setSize] = useState("0.12");
+  const [size, setSize] = useState(DEFAULT_CUTOUT_FOV_DEG.toFixed(2));
 
   const [stretch, setStretch] = useState<StretchMode>("asinh");
   const [colormap, setColormap] = useState<ColormapName>("inferno");
@@ -107,7 +112,7 @@ export default function App() {
   const [lastCoords, setLastCoords] = useState<{ ra: number; dec: number; size: number } | null>({
     ra: 133.79513,
     dec: -7.24515,
-    size: 0.12,
+    size: DEFAULT_CUTOUT_FOV_DEG,
   });
   const [activeUrlCoords, setActiveUrlCoords] = useState<{ ra: string; dec: string } | null>(null);
   const [urlBootstrapDone, setUrlBootstrapDone] = useState(false);
@@ -769,7 +774,7 @@ export default function App() {
   );
 
   const handleChangeFov = useCallback((newSize: number) => {
-    const clamped = Number(Math.min(1.0, Math.max(0.02, newSize)).toFixed(3));
+    const clamped = clampCutoutFov(newSize);
     setSize(String(clamped));
     setLastCoords((prev) => (prev ? { ...prev, size: clamped } : prev));
   }, []);
