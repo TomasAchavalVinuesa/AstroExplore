@@ -1,4 +1,4 @@
-# 🌌 AstroExplore
+#  AstroExplore
 [![NASA Space Apps Challenge 2026](https://img.shields.io/badge/NASA%20Space%20Apps-2026-blue.svg)](https://www.spaceappschallenge.org/2026/find-a-team/ley-de-conservacion-del-mate/?tab=project)
 [![React 19](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Vite 6](https://img.shields.io/badge/Vite-6.2-646cff.svg)](https://vitejs.dev/)
@@ -12,11 +12,11 @@
 
 > [!IMPORTANT]
 > **Full Documentation & Scientific Foundations:** All complete project documentation, theoretical background, mathematical derivations, and supporting materials are available in our Google Drive folder:  
-> 👉 **[Access Full Documentation & Foundations on Google Drive](https://drive.google.com/drive/folders/1TIUwAkfaNALHzs7UsjKtbPUVdvedDxpk)**
+>  **[Access Full Documentation & Foundations on Google Drive](https://drive.google.com/drive/folders/1TIUwAkfaNALHzs7UsjKtbPUVdvedDxpk)**
 
 ---
 
-## 🚀 Overview
+##  Overview
 
 **AstroExplore** is a client-side, open-source astronomical web platform built to unlock **NASA's SPHEREx** all-sky spectral survey (102 near-infrared spectral channels spanning $0.75 - 5.00\,\mu\text{m}$ across 6 Linear Variable Filter detector arrays) for students, educators, and citizen scientists.
 
@@ -24,31 +24,31 @@ By decoding raw multi-extension FITS archives from **NASA/IPAC IRSA** directly i
 
 ---
 
-## 🛠️ Core Interactive Astronomical Modules
+##  Core Interactive Astronomical Modules
 
-### 1. ⏱️ Multi-Epoch Blink Comparator, Time-Lapse & Difference Imaging
+### 1.  Multi-Epoch Blink Comparator, Time-Lapse & Difference Imaging
 - **Digital Blink Comparator:** Resurrects the classic blink comparator technique pioneered by Clyde Tombaugh during the discovery of Pluto (1930).
 - **Epoch Time-Lapse:** Alternates between SPHEREx survey epochs with customizable playback intervals and multi-epoch trajectory tracking.
 - **Pixel-Level Difference Math ($B - A$):** Cancels stationary background stars into neutral gray so moving objects (e.g., *Barnard's Star*, *WISE 0855*) and variable sources (*RW Aurigae*, *R Draconis*) stand out as distinct dipoles and monopoles.
 
-### 2. 🌈 Instant 102-Band Spectrogram ($0.75 - 5.00\,\mu\text{m}$) & ROI Analysis
+### 2.  Instant 102-Band Spectrogram ($0.75 - 5.00\,\mu\text{m}$) & ROI Analysis
 - **Live Spectral Profiling:** Extracts calibrated surface brightness ($\text{MJy/sr}$) across all 6 detector arrays (D1–D6) for any selected target or Region of Interest (ROI).
 - **ROI Analysis Modal:** Inspects selected sky regions with multi-tab scientific diagnostics, saved ROI management, and KaTeX-rendered mathematical formulas.
 - **Radiative Temperature Estimation:** Estimates effective temperatures via Wien's displacement law and continuum fitting.
 
-### 3. 🔬 6-Detector H2RG Array Architecture & SNR Co-Addition Guide
+### 3.  6-Detector H2RG Array Architecture & SNR Co-Addition Guide
 - **Detector Array Visualization:** Explains the 6 H2RG detector arrays and computes the quadratic Signal-to-Noise Ratio gain from stacking exposures:
   $$\text{SNR}_{\text{coadd}} = \text{SNR}_{\text{single}} \times \sqrt{17} \approx 4.123\times \quad (+312\% \text{ gain})$$
 - **Dual-Mode Interface:** Switches between *Explorer Mode* (intuitive analogies for students and newcomers) and *Scientific Mode* (variance maps, calibrated flux, and formal equations).
 
-### 4. 🗺️ HiPS Sky Map, Universal Celestial Resolver & Deep-Linking
+### 4.  HiPS Sky Map, Universal Celestial Resolver & Deep-Linking
 - **HiPS Sky Overlay:** Interactive sky map panel for spatial context and multi-survey navigation.
 - **CDS Sesame Resolver:** Resolves celestial object names via SIMBAD, NED, and VizieR into exact ICRS coordinates, with toggleable sexagesimal and decimal coordinate formats.
 - **Shareable URL State:** Encodes coordinates, field of view, stretch modes, and colormaps directly into URL parameters (`?ra=...&dec=...&fov=...`) for instant one-click sharing.
 
 ---
 
-## 🧪 Specialized Scientific Analysis Labs (`src/features/`)
+##  Specialized Scientific Analysis Labs (`src/features/`)
 
 AstroExplore includes three decoupled, pure-TypeScript scientific analysis engines paired with interactive React labs:
 
@@ -61,7 +61,7 @@ AstroExplore includes three decoupled, pure-TypeScript scientific analysis engin
 
 ---
 
-## 🎨 Immersive Experience & Accessibility
+##  Immersive Experience & Accessibility
 
 - **Bilingual Support (EN / ES):** Full English and Spanish localization powered by `LanguageContext` and `translations.ts`.
 - **Guided Interactive Tutorials:** Step-by-step onboarding overlays across the Entry Gate, Explorer, Sidebar, and ROI Analysis views, with keyboard navigation (`T`, Arrow keys, `Esc`).
@@ -70,7 +70,7 @@ AstroExplore includes three decoupled, pure-TypeScript scientific analysis engin
 
 ---
 
-## 🛰️ NASA Data Pipeline & Scientific Integrity ("The Unplug Test")
+##  NASA Data Pipeline & Scientific Integrity ("The Unplug Test")
 
 We enforce a strict scientific integrity principle:
 > *"If we disconnect the NASA APIs and the web app still displays synthetic numbers, it is wrong."*
@@ -83,7 +83,7 @@ Every image, variance map, and spectrum in AstroExplore is retrieved directly fr
 
 ---
 
-## 🧰 Tech Stack
+##  Tech Stack
 
 | Layer | Technology |
 | :--- | :--- |
@@ -96,7 +96,7 @@ Every image, variance map, and spectrum in AstroExplore is retrieved directly fr
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```text
 src/
@@ -112,7 +112,7 @@ src/
 
 ---
 
-## ⚙️ Getting Started
+##  Getting Started
 
 ### Prerequisites
 - **Node.js** 18+ (Node.js 20+ recommended)
@@ -141,7 +141,7 @@ npm run preview
 
 ---
 
-## 📚 Academic References (APA 7th Edition)
+##  Academic References (APA 7th Edition)
 
 All mathematical, thermodynamic, chemical, and physical models are grounded in standard university textbooks:
 - **Çengel, Y. A., & Boles, M. A. (2011).** *Thermodynamics: An Engineering Approach* (7th ed.). McGraw-Hill.
@@ -152,7 +152,7 @@ All mathematical, thermodynamic, chemical, and physical models are grounded in s
 
 ---
 
-## 🤖 AI Disclosure
+##  AI Disclosure
 
 In accordance with the NASA Space Apps Challenge 2026 submission guidelines:
 - **Tools Used:** Google Gemini (Antigravity) and Anthropic Claude as AI pair-programming and documentation assistants.
@@ -161,7 +161,7 @@ In accordance with the NASA Space Apps Challenge 2026 submission guidelines:
 
 ---
 
-## 👥 Team — Ley de Conservación del Mate
+##  Team — Ley de Conservación del Mate
 
 - **Jonás Villegas** — Lead Developer & Data Pipeline
 - **Tomás Achával** — Research & Analysis
